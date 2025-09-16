@@ -1,10 +1,18 @@
+body_models
+glove
+t2m
+kit
+save
+dataset/HumanML3D
+dataset/t2m_train.npy
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 
 # C extensions
-*.so
+*.so 
 
 # Distribution / packaging
 .Python

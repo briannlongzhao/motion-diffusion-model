@@ -821,3 +821,8 @@ class HumanML3D(data.Dataset):
 class KIT(HumanML3D):
     def __init__(self, mode, datapath='./dataset/kit_opt.txt', split="train", **kwargs):
         super(KIT, self).__init__(mode, datapath, split, **kwargs)
+
+
+class AnimalMotion(HumanML3D):
+    def __init__(self, mode, datapath='./dataset/animal_opt.txt', split="train", **kwargs):
+        super(AnimalMotion, self).__init__(mode, datapath, split, **kwargs)
