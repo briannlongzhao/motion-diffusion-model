@@ -51,4 +51,5 @@ save_latest: 500
 text_enc_mod: bigru
 tf_ratio: 0.4
 unit_length: 4
+use_cache: False
 -------------- End ----------------

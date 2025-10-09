@@ -68,7 +68,8 @@ class TrainLoop:
 
         self.sync_cuda = torch.cuda.is_available()
 
-        self._load_and_sync_parameters()
+        if args.resume:
+            self._load_and_sync_parameters()
         self.mp_trainer = MixedPrecisionTrainer(
             model=self.model,
             use_fp16=self.use_fp16,
@@ -331,6 +332,8 @@ class TrainLoop:
 
             if last_batch or not self.use_ddp:
                 losses = compute_losses()
+                if torch.isnan(losses["loss"]).any():
+                    print("NaN in loss")
             else:
                 with self.ddp_model.no_sync():
                     losses = compute_losses()

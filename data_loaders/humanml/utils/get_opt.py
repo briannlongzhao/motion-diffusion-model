@@ -68,6 +68,13 @@ def get_opt(opt_path, device):
         opt.joints_num = 21
         opt.dim_pose = 251
         opt.max_motion_length = 196
+    elif opt.dataset_name == 'animal':
+        opt.data_root = './dataset/AnimalMotion'
+        opt.motion_dir = None
+        opt.text_dir = None
+        opt.joints_num = 34
+        opt.dim_pose = 263
+        opt.max_motion_length = 196
     else:
         raise KeyError('Dataset not recognized')
 

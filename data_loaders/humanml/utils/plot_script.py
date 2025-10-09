@@ -75,8 +75,8 @@ def plot_3d_motion(save_path, kinematic_tree, joints, title, dataset, figsize=(3
     init()
     MINS = data.min(axis=0).min(axis=0)
     MAXS = data.max(axis=0).max(axis=0)
-    colors_blue = ["#4D84AA", "#5B9965", "#61CEB9", "#34C1E2", "#80B79A"]  # GT color
-    colors_orange = ["#DD5A37", "#D69E00", "#B75A39", "#FF6D00", "#DDB50E"]  # Generation color
+    colors_blue = ["#4D84AA", "#5B9965", "#61CEB9", "#34C1E2", "#80B79A", "#AE3EA5", "#58D803", "#776F13"]  # GT color
+    colors_orange = ["#DD5A37", "#D69E00", "#B75A39", "#FF6D00", "#DDB50E", "#27BAB5", "#A6117E", "#4611C2"]  # Generation color
     colors = colors_orange
     if vis_mode == 'upper_body':  # lower body taken fixed to input motion
         colors[0] = colors_blue[0]

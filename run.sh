@@ -10,7 +10,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --account=viscam
-#SBATCH --exclude=viscam5,viscam9,viscam10,viscam11,viscam12,viscam13
+#SBATCH --exclude=viscam1,viscam2,viscam3,viscam4,viscam6,viscam7,viscam8
 
 #################
 #set a job name
@@ -66,7 +66,16 @@ nvidia-smi
 source ~/.bashrc
 conda activate mdm
 
-python -m train.train_mdm --save_dir save/my_humanml_trans_enc_512_50steps --dataset humanml --diffusion_steps 50 --mask_frames --use_ema --train_platform_type WandBPlatform --overwrite
-# python -m train.train_mdm --save_dir save/my_humanml_trans_enc_512 --dataset humanml --train_platform_type WandBPlatform --overwrite
+python -m train.train_mdm \
+    --save_dir save/my_animal \
+    --dataset animal \
+    --diffusion_steps 50 \
+    --train_platform_type WandBPlatform \
+    --num_steps 300000 \
+    --batch_size 128 \
+    --mask_frames \
+    --use_ema \
+    --overwrite \
+    --use_cache
 
 echo "Done"

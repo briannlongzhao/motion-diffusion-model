@@ -136,10 +136,12 @@ def add_model_options(parser):
 
 def add_data_options(parser):
     group = parser.add_argument_group('dataset')
-    group.add_argument("--dataset", default='humanml', choices=['humanml', 'kit', 'humanact12', 'uestc'], type=str,
+    group.add_argument("--dataset", default='humanml', choices=['humanml', 'kit', 'humanact12', 'uestc', 'animal'], type=str,
                        help="Dataset name (choose from list).")
     group.add_argument("--data_dir", default="", type=str,
                        help="If empty, will use defaults according to the specified dataset.")
+    group.add_argument("--use_cache", action="store_true",
+                       help="Use cached .npy data")
 
 
 def add_training_options(parser):
@@ -172,7 +174,9 @@ def add_training_options(parser):
                        help="Limit for the maximal number of frames. In HumanML3D and KIT this field is ignored.")
     group.add_argument("--resume_checkpoint", default="", type=str,
                        help="If not empty, will start from the specified checkpoint (path to model###.pt file).")
-    
+    group.add_argument("--resume", action='store_true',
+                       help="If True, will resume training from resume_checkpoint or the last checkpoint.")
+
     group.add_argument("--gen_during_training", action='store_true',
                        help="If True, will generate motions during training, on each save interval.")
     group.add_argument("--gen_num_samples", default=3, type=int,
@@ -269,7 +273,7 @@ def add_evaluation_options(parser):
 def get_cond_mode(args):
     if args.unconstrained:
         cond_mode = 'no_cond'
-    elif args.dataset in ['kit', 'humanml']:
+    elif args.dataset in ['kit', 'humanml', 'animal']:
         cond_mode = 'text'
     else:
         cond_mode = 'action'

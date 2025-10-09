@@ -47,6 +47,11 @@ def get_model_args(args, data):
         data_rep = 'hml_vec'
         njoints = 251
         nfeats = 1
+    elif args.dataset == 'animal':
+        data_rep = 'hml_vec'
+        njoints = 407
+        nfeats = 1
+        all_goal_joint_names = None
 
     # Compatibility with old models
     if not hasattr(args, 'pred_len'):

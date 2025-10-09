@@ -159,7 +159,12 @@ def main(args=None):
 
         # Recover XYZ *positions* from HumanML3D vector representation
         if model.data_rep == 'hml_vec':
-            n_joints = 22 if sample.shape[1] == 263 else 21
+            if sample.shape[1] == 263:
+                n_joints = 22
+            elif sample.shape[1] == 407:
+                n_joints = 34
+            else:
+                n_joints = 21
             sample = data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()
             sample = recover_from_ric(sample, n_joints)
             sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1)
@@ -209,7 +214,12 @@ def main(args=None):
         fw.write('\n'.join([str(l) for l in all_lengths]))
 
     print(f"saving visualizations to [{out_path}]...")
-    skeleton = paramUtil.kit_kinematic_chain if args.dataset == 'kit' else paramUtil.t2m_kinematic_chain
+    if args.dataset == 'kit':
+        skeleton = paramUtil.kit_kinematic_chain
+    elif args.dataset == "animal":
+        skeleton = paramUtil.t2m_animal_kinematic_chain
+    else:
+        skeleton = paramUtil.t2m_kinematic_chain
 
     sample_print_template, row_print_template, all_print_template, \
     sample_file_template, row_file_template, all_file_template = construct_template_variables(args.unconstrained)
