@@ -67,15 +67,20 @@ source ~/.bashrc
 conda activate mdm
 
 python -m train.train_mdm \
-    --save_dir save/my_animal \
-    --dataset animal \
-    --diffusion_steps 50 \
+    --save_dir "save/my_animal_dip" \
     --train_platform_type WandBPlatform \
+    --dataset "animal" \
+    --diffusion_steps 10 \
+    --arch "trans_dec" \
+    --text_encoder_type "bert" \
+    --context_len 20 \
+    --pred_len 40 \
     --num_steps 300000 \
-    --batch_size 128 \
+    --gen_guidance_param 7.5 \
     --mask_frames \
     --use_ema \
     --overwrite \
+    --autoregressive \
     --use_cache
 
 echo "Done"
