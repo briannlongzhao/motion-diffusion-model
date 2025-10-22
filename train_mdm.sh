@@ -10,7 +10,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --account=viscam
-#SBATCH --exclude=viscam1,viscam2,viscam3,viscam4,viscam6,viscam7,viscam8
+#SBATCH --exclude=viscam1,viscam2,viscam3,viscam4,viscam5,viscam6,viscam7,viscam8,viscam9,viscam10,viscam11,viscam12,viscam13,viscam14,viscam15
 
 #################
 #set a job name
@@ -67,15 +67,17 @@ source ~/.bashrc
 conda activate mdm
 
 python -m train.train_mdm \
-    --save_dir save/my_animal_new \
+    --save_dir save/my_animal_all_cat \
     --dataset animal \
     --diffusion_steps 50 \
     --train_platform_type WandBPlatform \
-    --num_steps 300000 \
+    --num_steps 600000 \
     --batch_size 128 \
+    --arch trans_dec \
+    --text_encoder_type bert \
     --mask_frames \
     --use_ema \
     --overwrite \
-    --use_cache
+    # --use_cache
 
 echo "Done"

@@ -1,6 +1,7 @@
 from os.path import join as pjoin
 import sys
 import os
+from tqdm import tqdm
 
 # Add the project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
@@ -23,8 +24,8 @@ from sklearn.model_selection import train_test_split
 joints_file_name = "joints.npy"
 new_joints_file_name = "new_joints.npy"
 vecs_file_name = "new_joint_vecs.npy"
-data_dir = "/viscam/projects/animal_motion/data/data_test"
-data_dir = "/viscam/projects/animal_motion/briannlz/video_object_processing/data/track_3.0.0/horse"
+# data_dir = "/viscam/projects/animal_motion/data/data_test"
+data_dir = "/viscam/projects/animal_motion/briannlz/video_object_processing/data/track_3.0.0/"
 
 # Configuration for your dataset (adjust these parameters as needed)
 # Lower legs
@@ -257,7 +258,7 @@ def process_file(positions, feet_thre):
     #     positions = positions[::ds_num]
 
     '''Uniform Skeleton'''
-    positions = uniform_skeleton(positions, tgt_offsets)
+    # positions = uniform_skeleton(positions, tgt_offsets)
 
     '''Put on Floor'''
     # floor_height = positions.min(axis=0).min(axis=0)[1]
@@ -691,10 +692,12 @@ def validate_recovery(positions, feature_data, joints_num):
 
 def get_all_files(data_dir, file_name):
     all_files = []
-    for root, _, files in os.walk(data_dir):
-        for file in files:
-            if file == file_name:
-                all_files.append(os.path.join(root, file))
+    for root, _, files in tqdm(os.walk(data_dir)):
+        for f in files:
+            if f == file_name:
+                all_files.append(os.path.join(root, f))
+                print(f"Found {len(all_files)} {file_name}", end='\r', flush=True)
+                break
     return all_files
 
 
@@ -743,6 +746,10 @@ if __name__ == "__main__":
             # Load joint data
             source_data = np.load(joint_file_path)[:, 1:]  # Skip joint 0
             assert source_data.ndim == 3 and source_data.shape[1] == joints_num
+
+            if np.any(np.isnan(source_data)):
+                print(f"NaN detected in source data for {joint_file_path}")
+                continue
             
             # Process to feature vectors
             data, ground_positions, positions, l_velocity = process_file(source_data, 0.005)
