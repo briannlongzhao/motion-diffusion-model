@@ -10,11 +10,11 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --account=viscam
-#SBATCH --exclude=viscam1,viscam2,viscam3,viscam4,viscam5,viscam6,viscam7,viscam8
+#SBATCH --exclude=viscam1,viscam2,viscam3,viscam4,viscam5,viscam6,viscam7,viscam8,viscam14
 
 #################
 #set a job name
-#SBATCH --job-name="mdm train"
+#SBATCH --job-name="generate animal"
 
 #################
 #a file for job output, you can check job progress, append the job ID with %j to make it unique
@@ -66,18 +66,11 @@ nvidia-smi
 source ~/.bashrc
 conda activate mdm
 
-python -m train.train_mdm \
-    --save_dir save/balanced_bert \
-    --dataset animal \
-    --diffusion_steps 50 \
-    --train_platform_type WandBPlatform \
-    --num_steps 600000 \
-    --batch_size 128 \
-    --arch trans_dec \
-    --text_encoder_type bert \
-    --mask_frames \
-    --use_ema \
-    --overwrite \
-    --use_cache
+python generate_animal.py \
+	--model_path ./save/my_animal_all_cat_clip/model000600060.pt \
+	--num_samples 2 \
+	--num_repetitions 5 \
+	--motion_length 20  \
+    --test_data_dir "/viscam/projects/animal_motion/briannlz/video_object_processing/data/data_3.0.0/test/"
 
 echo "Done"

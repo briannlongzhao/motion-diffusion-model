@@ -887,7 +887,8 @@ class TextMotionMatchTrainer(object):
 
         if args.is_train:
             # self.motion_dis
-            self.logger = Logger(args.log_dir)
+            # self.logger = Logger(args.log_dir)
+            self.logger = None
             self.contrastive_loss = ContrastiveLoss(self.opt.negative_margin)
 
     def resume(self, model_dir):
@@ -1030,15 +1031,14 @@ class TextMotionMatchTrainer(object):
                     else:
                         logs[k] += v
 
-
                 it += 1
                 if it % self.opt.log_every == 0:
                     mean_loss = OrderedDict({'val_loss': val_loss})
-                    self.logger.scalar_summary('val_loss', val_loss, it)
-
-                    for tag, value in logs.items():
-                        self.logger.scalar_summary(tag, value / self.opt.log_every, it)
-                        mean_loss[tag] = value / self.opt.log_every
+                    if self.logger is not None:
+                        self.logger.scalar_summary('val_loss', val_loss, it)
+                        for tag, value in logs.items():
+                            self.logger.scalar_summary(tag, value / self.opt.log_every, it)
+                            mean_loss[tag] = value / self.opt.log_every
                     logs = OrderedDict()
                     print_current_loss_decomp(start_time, it, total_iters, mean_loss, epoch, i)
 

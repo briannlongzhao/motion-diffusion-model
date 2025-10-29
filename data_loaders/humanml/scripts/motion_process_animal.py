@@ -38,6 +38,38 @@ face_joint_indx = [20, 16, 10, 6]
 # r_hip, l_hip = 11, 16
 joints_num = 34
 
+feet_threshold = 0.005
+
+
+def remove_global_translation(positions):
+    """
+    Remove global translation by fixing root joint at first frame's y-position with x=0, z=0.
+    
+    Steps:
+    1. Calculate the y-coordinate where motion should be fixed (first frame's root y)
+    2. Move all frames so root is at (0, 0, 0)
+    3. Move all frames to the target y-axis coordinate
+    
+    Args:
+        positions: (n_frames, n_joints, 3) array
+    
+    Returns:
+        positions: Modified array with root joint fixed at (0, y_target, 0) for all frames
+    """
+    # Step 1: Calculate the target y-coordinate from first frame's root
+    target_y = positions[0, 0, 1]  # y-coordinate of first frame's root
+    
+    # Step 2: Move all frames so their root is at (0, 0, 0)
+    # Subtract each frame's root position from all joints in that frame (vectorized)
+    root_positions = positions[:, 0:1, :]  # (n_frames, 1, 3) - broadcast-friendly shape
+    positions = positions - root_positions  # Now root is at (0, 0, 0) for all frames
+    
+    # Step 3: Move all frames to the target y-axis coordinate
+    # Add [0, target_y, 0] to all joints in all frames
+    positions[:, :, 1] += target_y  # Now root is at (0, target_y, 0) for all frames
+    
+    return positions
+
 # positions (batch, joint_num, 3)
 def uniform_skeleton(positions, target_offset):
     src_skel = Skeleton(n_raw_offsets, kinematic_chain, 'cpu')
@@ -81,25 +113,25 @@ def extract_features(positions, feet_thre, n_raw_offsets, kinematic_chain, face_
         feet_fl_x = (positions[1:, fid_fl, 0] - positions[:-1, fid_fl, 0]) ** 2
         feet_fl_y = (positions[1:, fid_fl, 1] - positions[:-1, fid_fl, 1]) ** 2
         feet_fl_z = (positions[1:, fid_fl, 2] - positions[:-1, fid_fl, 2]) ** 2
-        feet_fl = ((feet_fl_x + feet_fl_y + feet_fl_z) < velfactor).astype(np.float)
+        feet_fl = ((feet_fl_x + feet_fl_y + feet_fl_z) < velfactor).astype(float)
         
         # Front right foot
         feet_fr_x = (positions[1:, fid_fr, 0] - positions[:-1, fid_fr, 0]) ** 2
         feet_fr_y = (positions[1:, fid_fr, 1] - positions[:-1, fid_fr, 1]) ** 2
         feet_fr_z = (positions[1:, fid_fr, 2] - positions[:-1, fid_fr, 2]) ** 2
-        feet_fr = ((feet_fr_x + feet_fr_y + feet_fr_z) < velfactor).astype(np.float)
+        feet_fr = ((feet_fr_x + feet_fr_y + feet_fr_z) < velfactor).astype(float)
         
         # Rear left foot
         feet_rl_x = (positions[1:, fid_rl, 0] - positions[:-1, fid_rl, 0]) ** 2
         feet_rl_y = (positions[1:, fid_rl, 1] - positions[:-1, fid_rl, 1]) ** 2
         feet_rl_z = (positions[1:, fid_rl, 2] - positions[:-1, fid_rl, 2]) ** 2
-        feet_rl = ((feet_rl_x + feet_rl_y + feet_rl_z) < velfactor).astype(np.float)
+        feet_rl = ((feet_rl_x + feet_rl_y + feet_rl_z) < velfactor).astype(float)
         
         # Rear right foot
         feet_rr_x = (positions[1:, fid_rr, 0] - positions[:-1, fid_rr, 0]) ** 2
         feet_rr_y = (positions[1:, fid_rr, 1] - positions[:-1, fid_rr, 1]) ** 2
         feet_rr_z = (positions[1:, fid_rr, 2] - positions[:-1, fid_rr, 2]) ** 2
-        feet_rr = ((feet_rr_x + feet_rr_y + feet_rr_z) < velfactor).astype(np.float)
+        feet_rr = ((feet_rr_x + feet_rr_y + feet_rr_z) < velfactor).astype(float)
         
         return feet_fl, feet_fr, feet_rl, feet_rr
 
@@ -206,7 +238,7 @@ def extract_features(positions, feet_thre, n_raw_offsets, kinematic_chain, face_
     data = np.concatenate([data, rot_data[:-1]], axis=-1)
     #     print(dataset.shape, local_vel.shape)
     data = np.concatenate([data, local_vel], axis=-1)
-    data = np.concatenate([data, feet_fl, feet_fr, feet_rl, feet_rr], axis=-1)
+    data = np.concatenate([data, feet_fl[..., np.newaxis], feet_fr[..., np.newaxis], feet_rl[..., np.newaxis], feet_rr[..., np.newaxis]], axis=-1)
 
     return data
 
@@ -714,6 +746,27 @@ def mean_variance(data, save_dir, joints_num):
 
     assert 8 + (joints_num - 1) * 9 + joints_num * 3 == Std.shape[-1]
     return Mean, Std
+
+
+def joints_to_vecs(
+        joints, 
+        feet_thre=feet_threshold, 
+        n_raw_offsets=t2m_animal_unified_raw_offsets, 
+        kinematic_chain=t2m_animal_unified_kinematic_chain, 
+        face_joint_indx=[19, 15, 11, 7], fid_fl=10, fid_fr=14, fid_rl=18, fid_rr=19):
+    # default values are for unified animal skeleton
+    # joints: (seq_len, joints_num, 3)
+    # vecs: (seq_len, dim_vecs)
+    n_raw_offsets = torch.from_numpy(n_raw_offsets)
+    vecs = extract_features(joints, feet_thre, n_raw_offsets, kinematic_chain, face_joint_indx, fid_fl, fid_fr, fid_rl, fid_rr)
+    return vecs
+
+def vecs_to_joints(vecs, joints_num):
+    # vecs: (seq_len, dim_vecs)
+    # joints: (seq_len, joints_num, 3)
+    joints = recover_from_ric(torch.from_numpy(vecs).unsqueeze(0).float(), joints_num)
+    joints = joints.squeeze(0).numpy()
+    return joints
     
 
 if __name__ == "__main__":
@@ -752,7 +805,7 @@ if __name__ == "__main__":
                 continue
             
             # Process to feature vectors
-            data, ground_positions, positions, l_velocity = process_file(source_data, 0.005)
+            data, ground_positions, positions, l_velocity = process_file(source_data, feet_thre=feet_threshold)
             
             # Check for NaN values in data
             if np.isnan(data).any():
@@ -788,7 +841,7 @@ if __name__ == "__main__":
         mean, std = mean_variance(data, data_dir, joints_num)
         np.save(pjoin(data_dir, 'Mean.npy'), mean)
         np.save(pjoin(data_dir, 'Std.npy'), std)
-        train_ids, test_ids = train_test_split(all_ids, test_size=0.2, random_state=42)
+        train_ids, test_ids = train_test_split(all_ids, test_size=0.01, random_state=42)
         with open(pjoin(data_dir, 'train.txt'), 'w') as f:
             for item in train_ids:
                 f.write("%s\n" % item)

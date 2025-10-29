@@ -12,6 +12,8 @@ from random import shuffle
 from torch.utils.data._utils.collate import default_collate
 from data_loaders.humanml.utils.word_vectorizer import WordVectorizer
 from data_loaders.humanml.utils.get_opt import get_opt
+from data_loaders.humanml.scripts.motion_process_animal import joints_to_vecs, vecs_to_joints, remove_global_translation
+from data_loaders.humanml.utils.paramUtil import unify_smal_joints, unify_animo_joints
 
 # import spacy
 
@@ -20,7 +22,13 @@ def collate_fn(batch):
     return default_collate(batch)
 
 
-def get_all_sequence_dirs(data_dir, image_suffix="rgb.png", sorted=False):
+def get_all_sequence_dirs(data_dir, image_suffix="rgb.png", sorted=False, use_cache=True):
+    cache_path = os.path.join(data_dir, 'all_sequence_dirs.txt')
+    if use_cache and os.path.exists(cache_path):
+        print(f'Loading all sequence dirs from cache file [{cache_path}]...')
+        with open(cache_path, 'r') as f:
+            result = [line.strip() for line in f.readlines()]
+        return result
     result = set()
     for root, dirs, files in tqdm(os.walk(data_dir, followlinks=True), desc="Getting all sequence dirs"):
         for f in files:
@@ -32,6 +40,11 @@ def get_all_sequence_dirs(data_dir, image_suffix="rgb.png", sorted=False):
         result.sort()
     else:
         shuffle(result)
+    if use_cache:
+        with open(cache_path, 'w') as f:
+            for r in result:
+                f.write(r + '\n')
+        print(f'Saved all sequence dirs to cache file [{cache_path}]...')    
     return result
 
 
@@ -134,6 +147,7 @@ class Text2MotionDataset(data.Dataset):
 
         self.mean = mean
         self.std = std
+        self.std[self.std == 0] = 1.0  # To avoid division by zero
         self.length_arr = np.array(length_list)
         self.data_dict = data_dict
         self.name_list = name_list
@@ -214,7 +228,6 @@ class Text2MotionDataset(data.Dataset):
             motion = motion[idx:idx+m_length]
 
         "Z Normalization"
-        self.std[self.std == 0] = 1.0  # To avoid division by zero
         motion = (motion - self.mean) / self.std
 
         return word_embeddings, pos_one_hots, caption, sent_len, motion, m_length
@@ -375,18 +388,17 @@ class Text2MotionDatasetV2(data.Dataset):
             m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
         
         original_length = None
-        if self.opt.fixed_len > 0:
+        if hasattr(self.opt, 'fixed_len') and self.opt.fixed_len > 0:
             # Crop fixed_len
             original_length = m_length
             m_length = self.opt.fixed_len
         
         idx = random.randint(0, len(motion) - m_length)
-        if self.opt.disable_offset_aug:
+        if hasattr(self.opt, 'disable_offset_aug') and self.opt.disable_offset_aug:
             idx = random.randint(0, self.opt.unit_length)
         motion = motion[idx:idx+m_length]
 
         "Z Normalization"
-        self.std[self.std == 0] = 1.0  # To avoid division by zero
         motion = (motion - self.mean) / self.std
 
         if m_length < self.max_motion_length:
@@ -396,7 +408,7 @@ class Text2MotionDatasetV2(data.Dataset):
         # print(word_embeddings.shape, motion.shape)
         # print(tokens)
 
-        length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
+        length = (original_length, m_length) if hasattr(self.opt, 'fixed_len') and self.opt.fixed_len > 0 else m_length
 
         return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens)
 
@@ -406,7 +418,7 @@ class Text2MotionDatasetAnimal(Text2MotionDatasetV2):
         self.opt = opt
         self.w_vectorizer = w_vectorizer
         self.max_length = 20
-        if self.opt.fixed_len > 0:
+        if hasattr(self.opt, 'fixed_len') and self.opt.fixed_len > 0:
             self.max_length = self.opt.fixed_len
         self.pointer = 0
         self.max_motion_length = opt.max_motion_length
@@ -414,9 +426,10 @@ class Text2MotionDatasetAnimal(Text2MotionDatasetV2):
 
         data_dict = {}
         id_list = []
-        with cs.open(split_file, 'r') as f:
-            for line in f.readlines():
-                id_list.append(line.strip())
+        if os.path.exists(split_file):
+            with cs.open(split_file, 'r') as f:
+                for line in f.readlines():
+                    id_list.append(line.strip())
         # id_list = id_list[:200]
 
         new_name_list = []
@@ -426,7 +439,7 @@ class Text2MotionDatasetAnimal(Text2MotionDatasetV2):
         _name =''
         # cache_path = os.path.join(opt.meta_dir, self.opt.dataset_name + '_' + _split + _name + '.npy')
         cache_path = os.path.join(opt.data_root, self.opt.dataset_name + '_' + _split + _name + '.npy')
-        if opt.use_cache and os.path.exists(cache_path):
+        if hasattr(opt, 'use_cache') and opt.use_cache and os.path.exists(cache_path):
             print(f'Loading motions from cache file [{cache_path}]...')
             _cache = np.load(cache_path, allow_pickle=True)[None][0]
             name_list, length_list, data_dict = _cache['name_list'], _cache['length_list'], _cache['data_dict']
@@ -434,11 +447,244 @@ class Text2MotionDatasetAnimal(Text2MotionDatasetV2):
             all_sequence_dirs = get_all_sequence_dirs(opt.data_root, sorted=True)
             all_motion_paths = [os.path.join(d, "new_joint_vecs.npy") for d in all_sequence_dirs]
             all_text_paths = [os.path.join(d, "texts_gemini.txt") for d in all_sequence_dirs]
-            for motion_path, text_path in zip(all_motion_paths, all_text_paths):
+            for motion_path, text_path in tqdm(zip(all_motion_paths, all_text_paths), total=len(all_motion_paths), desc="Loading data"):
                 try:
-                    motion = np.load(motion_path)
-                    if (len(motion)) < min_motion_len or (len(motion) >= 200):
+                    name = os.path.basename(os.path.dirname(text_path))
+                    if len(id_list) > 0 and name not in id_list:
                         continue
+                    motion = np.load(motion_path)
+                    if len(motion) >= 200:
+                        motion = motion[:200]
+                    name = os.path.basename(os.path.dirname(motion_path))
+                    text_data = []
+                    with cs.open(text_path) as f:
+                        for line in f.readlines():
+                            text_dict = {}
+                            line_split = line.strip().split('#')
+                            caption = line_split[0]
+                            tokens = line_split[1].split(' ')
+                            f_tag = float(line_split[2])
+                            to_tag = float(line_split[3])
+                            f_tag = 0.0 if np.isnan(f_tag) else f_tag
+                            to_tag = 0.0 if np.isnan(to_tag) else to_tag
+                            text_dict['caption'] = caption
+                            text_dict['tokens'] = tokens
+                            text_data.append(text_dict)
+                    action_file = os.path.join(os.path.dirname(text_path), "actions.txt")
+                    actions = []
+                    with cs.open(action_file) as f:
+                        for line in f.readlines():
+                            actions.append(line.strip())
+                    data_dict[name] = {
+                        'motion': motion,
+                        'length': len(motion),
+                        'text': text_data,
+                        'action': actions
+                    }
+                    new_name_list.append(name)
+                    length_list.append(len(motion))
+                except Exception as e:
+                    print(e)
+                    pass
+
+            name_list, length_list = zip(*sorted(zip(new_name_list, length_list), key=lambda x: x[1]))
+            if hasattr(opt, 'use_cache') and opt.use_cache:
+                print(f'Saving motions to cache file [{cache_path}]...')
+                np.save(cache_path, {
+                    'name_list': name_list,
+                    'length_list': length_list,
+                    'data_dict': data_dict})
+
+        if hasattr(opt, 'unify_joints') and opt.unify_joints:
+            new_data_dict = {}
+            for name, data in data_dict.items():
+                motion = data['motion']
+                motion_joints = vecs_to_joints(motion, joints_num=34)
+                motion_joints = unify_smal_joints(motion_joints)
+                motion = joints_to_vecs(motion_joints)
+                new_data_dict[name] = {
+                    'motion': motion,
+                    'length': len(motion),
+                    'text': data['text'],
+                    'action': data['action']
+                }
+            data_dict = new_data_dict
+            all_motions = np.concatenate([data['motion'] for data in data_dict.values()], axis=0)
+            if os.path.exists(opt.unify_joints_mean):
+                mean = np.load(opt.unify_joints_mean)
+            else:
+                mean = np.mean(all_motions, axis=0)
+                np.save(opt.unify_joints_mean, mean)
+            if os.path.exists(opt.unify_joints_std):
+                std = np.load(opt.unify_joints_std)
+            else:
+                std = np.std(all_motions, axis=0)
+                np.save(opt.unify_joints_std, std)
+
+
+        self.mean = mean
+        self.std = std
+        self.std[self.std == 0] = 1.0  # To avoid division by zero
+        self.length_arr = np.array(length_list)
+        self.data_dict = data_dict
+        self.name_list = name_list
+        self.balance_dataset()
+        self.reset_max_len(self.max_length)
+        print(f"Dataset size: {len(self.data_dict)}")
+
+    def balance_dataset(self):
+        # Ensure name_list is mutable
+        if not isinstance(self.name_list, list):
+            self.name_list = list(self.name_list)
+
+        # 1) Compute current action counts (only count first action in list)
+        action_to_names = {}
+        for name in self.name_list:
+            action_list = self.data_dict[name].get('action', [])
+            # Only use the first action if it's a list, otherwise treat as string
+            if isinstance(action_list, list) and len(action_list) > 0:
+                action = action_list[0].strip()
+            elif isinstance(action_list, str):
+                action = action_list.strip()
+            else:
+                action = ''
+            if action:
+                action_to_names.setdefault(action, []).append(name)
+        
+        if len(action_to_names) == 0:
+            print('Action distribution: {}')
+            return
+        
+        action_to_num = {action: len(names) for action, names in action_to_names.items()}
+        print(f"Action distribution before balancing: {action_to_num}")
+
+        # 2) Compute target count (use whichever is higher: mean or median)
+        counts = list(action_to_num.values())
+        mean_count = int(np.mean(counts))
+        median_count = int(np.median(counts))
+        target_count = max(mean_count, median_count)
+        if target_count < 1:
+            target_count = 1
+        print(f"Mean action count: {mean_count}, Median action count: {median_count}, Using: {target_count}")
+
+        # 3) Downsample actions above the target
+        for action, names in list(action_to_names.items()):
+            if len(names) > target_count:
+                # randomly select which entries to keep
+                keep_names = random.sample(names, target_count)
+                remove_names = [n for n in names if n not in keep_names]
+                for n in remove_names:
+                    self.data_dict.pop(n, None)
+                    try:
+                        self.name_list.remove(n)
+                    except ValueError:
+                        pass
+                action_to_names[action] = keep_names
+        
+        # 4) Upsample actions below the target
+        for action, names in list(action_to_names.items()):
+            if len(names) < target_count:
+                need = target_count - len(names)
+                # Track how many times each entry has been upsampled
+                upsample_count = {name: 0 for name in names}
+                
+                for _ in range(need):
+                    # Choose entry with minimum upsample count
+                    min_count = min(upsample_count.values())
+                    candidates = [name for name, count in upsample_count.items() if count == min_count]
+                    orig = random.choice(candidates)
+                    upsample_count[orig] += 1
+                    
+                    # Extract the last number in the string and increment it
+                    import re
+                    # Find all numbers in the string
+                    numbers = re.findall(r'\d+', orig)
+                    if numbers:
+                        # Get the last number
+                        last_num = numbers[-1]
+                        last_num_int = int(last_num)
+                        # Find the position of the last number
+                        last_pos = orig.rfind(last_num)
+                        # Increment and create new name
+                        new_num = str(last_num_int + 1).zfill(len(last_num))
+                        new_name = orig[:last_pos] + new_num + orig[last_pos + len(last_num):]
+                    else:
+                        # No numbers found, append _001
+                        new_name = f"{orig}_001"
+                    
+                    # Ensure uniqueness
+                    while new_name in self.data_dict:
+                        # If collision, keep incrementing
+                        numbers = re.findall(r'\d+', new_name)
+                        if numbers:
+                            last_num = numbers[-1]
+                            last_num_int = int(last_num)
+                            last_pos = new_name.rfind(last_num)
+                            new_num = str(last_num_int + 1).zfill(len(last_num))
+                            new_name = new_name[:last_pos] + new_num + new_name[last_pos + len(last_num):]
+                        else:
+                            new_name = f"{new_name}_001"
+                    
+                    d = self.data_dict[orig]
+                    self.data_dict[new_name] = {
+                        'motion': d['motion'], 
+                        'length': d['length'], 
+                        'text': d.get('text', []), 
+                        'action': d.get('action', [])
+                    }
+                    self.name_list.append(new_name)
+                    action_to_names[action].append(new_name)
+        
+        # 5) Update length_arr and report final distribution
+        self.length_arr = np.array([self.data_dict[n]['length'] for n in self.name_list]) if len(self.name_list) > 0 else np.array([])
+        
+        action_to_num = {}
+        for name in self.name_list:
+            action_list = self.data_dict[name].get('action', [])
+            # Only use the first action if it's a list, otherwise treat as string
+            if isinstance(action_list, list) and len(action_list) > 0:
+                action = action_list[0].strip()
+            elif isinstance(action_list, str):
+                action = action_list.strip()
+            else:
+                action = ''
+            if action:
+                action_to_num[action] = action_to_num.get(action, 0) + 1
+        print(f"Final action distribution: {action_to_num}")
+
+
+class Text2MotionDatasetAnimalGTEval(Text2MotionDatasetAnimal):
+    def __init__(self, opt, mean, std, split_file, w_vectorizer):
+        self.opt = opt
+        self.w_vectorizer = w_vectorizer
+        self.max_length = 20
+        if hasattr(self.opt, 'fixed_len') and self.opt.fixed_len > 0:
+            self.max_length = self.opt.fixed_len
+        self.pointer = 0
+        self.max_motion_length = opt.max_motion_length
+        min_motion_len = 40
+
+        length_list = []
+        new_name_list = []
+        data_dict = {}
+
+        _split = os.path.basename(split_file).replace('.txt', '')
+        _name =''
+        cache_path = os.path.join(opt.data_root, self.opt.dataset_name + '_' + _split + _name + '.npy')
+        if hasattr(opt, 'use_cache') and opt.use_cache and os.path.exists(cache_path):
+            print(f'Loading motions from cache file [{cache_path}]...')
+            _cache = np.load(cache_path, allow_pickle=True)[None][0]
+            name_list, length_list, data_dict = _cache['name_list'], _cache['length_list'], _cache['data_dict']
+        else:
+            all_sequence_dirs = get_all_sequence_dirs(opt.data_root, sorted=True)
+            all_motion_paths = [os.path.join(d, "new_joint_vecs.npy") for d in all_sequence_dirs]
+            all_text_paths = [os.path.join(d, "texts_gemini.txt") for d in all_sequence_dirs]
+            for motion_path, text_path in tqdm(zip(all_motion_paths, all_text_paths), total=len(all_motion_paths), desc="Loading data"):
+                try:
+                    name = os.path.basename(os.path.dirname(text_path))
+                    motion = np.load(motion_path)
+                    if len(motion) > 200:
+                        motion = motion[:200]
                     name = os.path.basename(os.path.dirname(motion_path))
                     text_data = []
                     with cs.open(text_path) as f:
@@ -466,19 +712,170 @@ class Text2MotionDatasetAnimal(Text2MotionDatasetV2):
                     pass
 
             name_list, length_list = zip(*sorted(zip(new_name_list, length_list), key=lambda x: x[1]))
-            print(f'Saving motions to cache file [{cache_path}]...')
-            np.save(cache_path, {
-                'name_list': name_list,
-                'length_list': length_list,
-                'data_dict': data_dict})
+            if hasattr(opt, 'use_cache') and opt.use_cache:
+                print(f'Saving motions to cache file [{cache_path}]...')
+                np.save(cache_path, {
+                    'name_list': name_list,
+                    'length_list': length_list,
+                    'data_dict': data_dict})
+                    
+        # duplicate data for each text
+        new_length_list = []
+        new_name_list = []
+        new_data_dict = {}
+        for name, data in data_dict.items():
+            motion = data['motion']
+            length = data['length']
+            text_list = data['text']
+            for i, text_data in enumerate(text_list):
+                new_name = name + f'_{i}'
+                new_data_dict[new_name] = {
+                    'motion': motion,
+                    'length': length,
+                    'text': [text_data]
+                }
+                new_name_list.append(new_name)
+                new_length_list.append(length)
+        data_dict = new_data_dict
+        name_list = new_name_list
+        length_list = new_length_list
+
+        if hasattr(opt, 'unify_joints') and opt.unify_joints:
+            new_data_dict = {}
+            for name, data in data_dict.items():
+                motion = data['motion']
+                motion_joints = vecs_to_joints(motion, joints_num=34)
+                motion_joints = unify_smal_joints(motion_joints)
+                motion = joints_to_vecs(motion_joints)
+                new_data_dict[name] = {
+                    'motion': motion,
+                    'length': len(motion),
+                    'text': data['text']
+                }
+            data_dict = new_data_dict
+            all_motions = np.concatenate([data['motion'] for data in data_dict.values()], axis=0)
+            if os.path.exists(opt.unify_joints_mean):
+                mean = np.load(opt.unify_joints_mean)
+            else:
+                mean = np.mean(all_motions, axis=0)
+                np.save(opt.unify_joints_mean, mean)
+            if os.path.exists(opt.unify_joints_std):
+                std = np.load(opt.unify_joints_std)
+            else:
+                std = np.std(all_motions, axis=0)
+                np.save(opt.unify_joints_std, std)
 
         self.mean = mean
         self.std = std
+        self.std[self.std == 0] = 1.0  # To avoid division by zero
         self.length_arr = np.array(length_list)
         self.data_dict = data_dict
         self.name_list = name_list
         self.reset_max_len(self.max_length)
         print(f"Dataset size: {len(self.data_dict)}")
+
+
+class Text2MotionDatasetAnimaGenEval(Text2MotionDatasetAnimal):
+    # Load data from result.npy in each folder
+    def __init__(self, opt, mean, std, split_file, w_vectorizer, results_file=None):
+        self.opt = opt
+        self.w_vectorizer = w_vectorizer
+        self.max_length = 20
+        if hasattr(self.opt, 'fixed_len') and self.opt.fixed_len > 0:
+            self.max_length = self.opt.fixed_len
+        self.pointer = 0
+        self.nlp = spacy.load('en_core_web_sm')
+        self.max_motion_length = opt.max_motion_length
+        min_motion_len = 40
+
+        data_dict = {}
+        id_list = []
+
+        self.name_list = []
+        length_list = []
+
+        _split = os.path.basename(split_file).replace('.txt', '')
+        _name = ''
+        all_sequence_dirs = get_all_sequence_dirs(opt.data_root, sorted=True)
+        all_results_paths = [os.path.join(d, results_file) for d in all_sequence_dirs]
+
+        count = 0
+
+        for results_path in tqdm(all_results_paths, total=len(all_results_paths), desc="Loading data"):
+            count += 1
+            data = np.load(results_path, allow_pickle=True).item()
+            for i, (motion, text, length) in enumerate(zip(data['motion_vecs'], data['texts'], data['lengths'])):
+                name = os.path.basename(os.path.dirname(results_path)) + f'_{i}'
+                text_data = {}
+                text_data['caption'] = text
+                tokens = []
+                word_list, pos_list = self.process_text(text.strip())
+                tokens = ['%s/%s'%(word_list[i], pos_list[i]) for i in range(len(word_list))]
+                text_data['tokens'] = tokens
+                text_data = [text_data]
+                data_dict[name] = {
+                    'motion': motion,
+                    'length': length,
+                    'text': text_data
+                }
+                self.name_list.append(name)
+            # if count >= 33:
+            #     break
+
+        if hasattr(opt, 'unify_joints') and opt.unify_joints:
+            new_data_dict = {}
+            for name, data in data_dict.items():
+                motion = data['motion']
+                
+                if "animo" in results_file:
+                    motion_joints = vecs_to_joints(motion, joints_num=30)
+                    motion_joints = unify_animo_joints(motion_joints)
+                else:
+                    motion_joints = vecs_to_joints(motion, joints_num=34)
+                    motion_joints = unify_smal_joints(motion_joints)
+                motion_joints = remove_global_translation(motion_joints)
+                motion = joints_to_vecs(motion_joints)
+                new_data_dict[name] = {
+                    'motion': motion,
+                    'length': len(motion),
+                    'text': data['text']
+                }
+            data_dict = new_data_dict
+            all_motions = np.concatenate([data['motion'] for data in data_dict.values()], axis=0)
+            if os.path.exists(opt.unify_joints_mean):
+                mean = np.load(opt.unify_joints_mean)
+            else:
+                mean = np.mean(all_motions, axis=0)
+                np.save(opt.unify_joints_mean, mean)
+            if os.path.exists(opt.unify_joints_std):
+                std = np.load(opt.unify_joints_std)
+            else:
+                std = np.std(all_motions, axis=0)
+                np.save(opt.unify_joints_std, std)
+
+        self.mean = mean
+        self.std = std
+        self.std[self.std == 0] = 1.0  # To avoid division by zero
+        self.length_arr = np.array(length_list)
+        self.data_dict = data_dict
+        self.reset_max_len(self.max_length)
+        print(f"Dataset size: {len(self.data_dict)}")
+
+    def process_text(self, sentence):
+        sentence = sentence.replace('-', '')
+        doc = self.nlp(sentence)
+        word_list = []
+        pos_list = []
+        for token in doc:
+            word = token.text
+            if not word.isalpha():
+                continue
+            if (token.pos_ == 'NOUN' or token.pos_ == 'VERB') and (word != 'left'):
+                word_list.append(token.lemma_)
+            else:
+                word_list.append(word)
+            pos_list.append(token.pos_)
+        return word_list, pos_list
 
 
 '''For use of training baseline'''
@@ -687,6 +1084,7 @@ class MotionDatasetV2(data.Dataset):
 
         self.mean = mean
         self.std = std
+        self.std[self.std == 0] = 1.0  # To avoid division by zero
         print("Total number of motions {}, snippets {}".format(len(self.data), self.cumsum[-1]))
 
     def inv_transform(self, data):
@@ -704,7 +1102,6 @@ class MotionDatasetV2(data.Dataset):
             idx = 0
         motion = self.data[motion_id][idx:idx+self.opt.window_size]
         "Z Normalization"
-        self.std[self.std == 0] = 1.0  # To avoid division by zero
         motion = (motion - self.mean) / self.std
 
         return motion
@@ -868,7 +1265,7 @@ class TextOnlyAnimalDataset(TextOnlyDataset):
         length_list = []
         all_sequence_dirs = get_all_sequence_dirs(opt.data_root, sorted=True)
         all_text_paths = [os.path.join(d, "texts_gemini.txt") for d in all_sequence_dirs]
-        for text_path in all_text_paths:
+        for text_path in tqdm(all_text_paths, total=len(all_text_paths), desc="Loading text data"):
             try:
                 name = os.path.basename(os.path.dirname(text_path))
                 if name not in id_list:
@@ -943,16 +1340,10 @@ class HumanML3D(data.Dataset):
 
         self.split_file = pjoin(opt.data_root, f'{split}.txt')
         if mode == 'text_only':
-            if name == "animal":
-                self.t2m_dataset = TextOnlyAnimalDataset(self.opt, self.mean, self.std, self.split_file)
-            else:
-                self.t2m_dataset = TextOnlyDataset(self.opt, self.mean, self.std, self.split_file)
+            self.t2m_dataset = TextOnlyDataset(self.opt, self.mean, self.std, self.split_file)
         else:
             self.w_vectorizer = WordVectorizer(pjoin(opt.cache_dir, 'glove'), 'our_vab')
-            if name == "animal":
-                self.t2m_dataset = Text2MotionDatasetAnimal(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer)
-            else:
-                self.t2m_dataset = Text2MotionDatasetV2(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer)
+            self.t2m_dataset = Text2MotionDatasetV2(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer)
             self.num_actions = 1 # dummy placeholder
 
         self.mean_gpu = torch.tensor(self.mean).to(device)[None, :, None, None]
@@ -975,6 +1366,88 @@ class KIT(HumanML3D):
         super(KIT, self).__init__(mode, datapath, split, **kwargs)
 
 
-class AnimalMotion(HumanML3D):
-    def __init__(self, mode, datapath='./dataset/animal_opt.txt', split="train", **kwargs):
-        super(AnimalMotion, self).__init__(mode, datapath, split, name="animal", **kwargs)
+class AnimalMotion(data.Dataset):
+    def __init__(self, mode, datapath='./dataset/animal_opt.txt', split="train", name="animal", **kwargs):
+        self.mode = mode
+
+        self.dataset_name = name
+        self.dataname = name
+
+        # Configurations of T2M dataset and KIT dataset is almost the same
+        abs_base_path = kwargs.get('abs_path', '.')
+        dataset_opt_path = pjoin(abs_base_path, datapath)
+        device = kwargs.get('device', None)
+        opt = get_opt(dataset_opt_path, device)
+        # opt.meta_dir = pjoin(abs_base_path, opt.meta_dir)
+        opt.cache_dir = kwargs.get('cache_path', '.')
+        if opt.motion_dir is not None:
+            opt.motion_dir = pjoin(abs_base_path, opt.motion_dir)
+        if opt.text_dir is not None:
+            opt.text_dir = pjoin(abs_base_path, opt.text_dir)
+        opt.model_dir = pjoin(abs_base_path, opt.model_dir)
+        opt.checkpoints_dir = pjoin(abs_base_path, opt.checkpoints_dir)
+        opt.data_root = pjoin(abs_base_path, opt.data_root)
+        opt.save_root = pjoin(abs_base_path, opt.save_root)
+        opt.meta_dir = pjoin(abs_base_path, './dataset')
+        opt.use_cache = kwargs.get('use_cache', True)
+        opt.fixed_len = kwargs.get('fixed_len', 0)
+        if opt.fixed_len > 0:
+            opt.max_motion_length = opt.fixed_len
+        is_autoregressive = kwargs.get('autoregressive', False)
+        opt.disable_offset_aug = is_autoregressive and (opt.fixed_len > 0) and (mode == 'eval')  # for autoregressive evaluation, use the start of the motion and not something from the middle
+        self.opt = opt
+        print('Loading dataset %s ...' % opt.dataset_name)
+
+        self.mean = np.load("dataset/AnimalMotion/Mean.npy")
+        self.std = np.load("dataset/AnimalMotion/Std.npy")
+
+        # if mode == 'gt':
+        #     # used by T2M models (including evaluators)
+        #     self.mean = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_mean.npy'))
+        #     self.std = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_std.npy'))
+        # elif mode in ['train', 'eval', 'text_only']:
+        #     # used by our models
+        #     self.mean = np.load(pjoin(opt.data_root, 'Mean.npy'))
+        #     self.std = np.load(pjoin(opt.data_root, 'Std.npy'))
+
+        # if mode == 'eval':
+            # used by T2M models (including evaluators)
+            # this is to translate their norms to ours
+            # self.mean_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_mean.npy'))
+            # self.std_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_std.npy'))
+
+        self.split_file = pjoin(opt.data_root, f'{split}.txt')
+
+        if mode in ["gt", "eval"]:
+            self.opt.unify_joints = True
+            self.opt.unify_joints_mean = "./animal_unified/mean_unified.npy"
+            self.opt.unify_joints_std = "./animal_unified/std_unified.npy"
+            self.opt.data_root = str(self.opt.data_root) + "_test"
+            self.split_file = pjoin(opt.data_root, os.path.basename(self.split_file))
+            self.w_vectorizer = WordVectorizer(pjoin(opt.cache_dir, 'glove'), 'our_vab')
+
+        
+        if mode == 'text_only':
+            self.t2m_dataset = TextOnlyAnimalDataset(self.opt, self.mean, self.std, self.split_file)
+        elif mode == "eval":
+            self.t2m_dataset = Text2MotionDatasetAnimaGenEval(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer, results_file=kwargs.get('results_file'))
+        elif mode == "gt":
+            self.t2m_dataset = Text2MotionDatasetAnimalGTEval(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer)
+        else:
+            self.w_vectorizer = WordVectorizer(pjoin(opt.cache_dir, 'glove'), 'our_vab')
+            self.t2m_dataset = Text2MotionDatasetAnimal(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer)
+            self.num_actions = 1 # dummy placeholder
+
+        self.mean_gpu = torch.tensor(self.mean).to(device)[None, :, None, None]
+        self.std_gpu = torch.tensor(self.std).to(device)[None, :, None, None]
+
+        assert len(self.t2m_dataset) > 1, 'You loaded an empty dataset, ' \
+                                          'it is probably because your data dir has only texts and no motions.\n' \
+                                          'To train and evaluate MDM you should get the FULL data as described ' \
+                                          'in the README file.'
+
+    def __getitem__(self, item):
+        return self.t2m_dataset.__getitem__(item)
+
+    def __len__(self):
+        return self.t2m_dataset.__len__()

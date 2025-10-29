@@ -107,26 +107,46 @@ def evaluate_diversity(activation_dict, file, diversity_times):
     return eval_dict
 
 
+
 def evaluate_multimodality(eval_wrapper, mm_motion_loaders, file, mm_num_times):
     eval_dict = OrderedDict({})
     print('========== Evaluating MultiModality ==========')
     for model_name, mm_motion_loader in mm_motion_loaders.items():
-        mm_motion_embeddings = []
+        if model_name == 'ground truth':
+            eval_dict[model_name] = 0
+            continue
+        multimodality = 0
+        caption_to_motion_embeddings = {}
         with torch.no_grad():
             for idx, batch in enumerate(mm_motion_loader):
                 # (1, mm_replications, dim_pos)
-                motions, m_lens = batch
-                motion_embedings = eval_wrapper.get_motion_embeddings(motions[0], m_lens[0])
-                mm_motion_embeddings.append(motion_embedings.unsqueeze(0))
-        if len(mm_motion_embeddings) == 0:
-            multimodality = 0
-        else:
-            mm_motion_embeddings = torch.cat(mm_motion_embeddings, dim=0).cpu().numpy()
-            multimodality = calculate_multimodality(mm_motion_embeddings, mm_num_times)
+                _, _, captions, _, motions, m_lens, _ = batch
+                motion_embedings = eval_wrapper.get_motion_embeddings(motions, m_lens)
+                for caption, motion_embedding in zip(captions, motion_embedings):
+                    if caption not in caption_to_motion_embeddings:
+                        caption_to_motion_embeddings[caption] = []
+                    caption_to_motion_embeddings[caption].append(motion_embedding)
+        for caption, motion_embeddings in caption_to_motion_embeddings.items():
+            caption_to_motion_embeddings[caption] = torch.stack(motion_embeddings, dim=0)
+        for caption, motion_embeddings in caption_to_motion_embeddings.items():
+            multimodality += calculate_multimodality(motion_embeddings.cpu().numpy(), mm_num_times)
+        multimodality /= len(caption_to_motion_embeddings)
         print(f'---> [{model_name}] Multimodality: {multimodality:.4f}')
         print(f'---> [{model_name}] Multimodality: {multimodality:.4f}', file=file, flush=True)
         eval_dict[model_name] = multimodality
     return eval_dict
+
+
+def calculate_multimodality(activation, multimodality_times):
+    first_dices, second_dices = [], []
+    for i in range(multimodality_times):
+        choices = np.random.choice(activation.shape[0], 2, replace=False)
+        first_dices.append(choices[0])
+        second_dices.append(choices[1])
+    first_dices = np.array(first_dices)
+    second_dices = np.array(second_dices)
+    dist = linalg.norm(activation[first_dices] - activation[second_dices], axis=1)
+    return dist.mean()
 
 
 def get_metric_statistics(values, replication_times):
@@ -136,8 +156,8 @@ def get_metric_statistics(values, replication_times):
     return mean, conf_interval
 
 
-def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replication_times, 
-               diversity_times, mm_num_times, run_mm=False, eval_platform=None):
+def evaluation(eval_wrapper, gt_loader, motion_loaders, log_file, replication_times, 
+               diversity_times, mm_num_times, eval_platform=None):
     with open(log_file, 'w') as f:
         all_metrics = OrderedDict({'Matching Score': OrderedDict({}),
                                    'R_precision': OrderedDict({}),
@@ -145,14 +165,6 @@ def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replicati
                                    'Diversity': OrderedDict({}),
                                    'MultiModality': OrderedDict({})})
         for replication in range(replication_times):
-            motion_loaders = {}
-            mm_motion_loaders = {}
-            motion_loaders['ground truth'] = gt_loader
-            for motion_loader_name, motion_loader_getter in eval_motion_loaders.items():
-                motion_loader, mm_motion_loader = motion_loader_getter()
-                motion_loaders[motion_loader_name] = motion_loader
-                mm_motion_loaders[motion_loader_name] = mm_motion_loader
-
             print(f'==================== Replication {replication} ====================')
             print(f'==================== Replication {replication} ====================', file=f, flush=True)
             print(f'Time: {datetime.now()}')
@@ -167,10 +179,9 @@ def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replicati
             print(f'Time: {datetime.now()}', file=f, flush=True)
             div_score_dict = evaluate_diversity(acti_dict, f, diversity_times)
 
-            if run_mm:
-                print(f'Time: {datetime.now()}')
-                print(f'Time: {datetime.now()}', file=f, flush=True)
-                mm_score_dict = evaluate_multimodality(eval_wrapper, mm_motion_loaders, f, mm_num_times)
+            print(f'Time: {datetime.now()}')
+            print(f'Time: {datetime.now()}', file=f, flush=True)
+            mm_score_dict = evaluate_multimodality(eval_wrapper, motion_loaders, f, mm_num_times)
 
             print(f'!!! DONE !!!')
             print(f'!!! DONE !!!', file=f, flush=True)
@@ -198,12 +209,12 @@ def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replicati
                     all_metrics['Diversity'][key] = [item]
                 else:
                     all_metrics['Diversity'][key] += [item]
-            if run_mm:
-                for key, item in mm_score_dict.items():
-                    if key not in all_metrics['MultiModality']:
-                        all_metrics['MultiModality'][key] = [item]
-                    else:
-                        all_metrics['MultiModality'][key] += [item]
+            
+            for key, item in mm_score_dict.items():
+                if key not in all_metrics['MultiModality']:
+                    all_metrics['MultiModality'][key] = [item]
+                else:
+                    all_metrics['MultiModality'][key] += [item]
 
 
         # print(all_metrics['Diversity'])
@@ -245,7 +256,7 @@ if __name__ == '__main__':
     args.batch_size = 32 # This must be 32! Don't change it! otherwise it will cause a bug in R precision calc!
     name = os.path.basename(os.path.dirname(args.model_path))
     niter = os.path.basename(args.model_path).replace('model', '').replace('.pt', '')
-    log_name = 'eval_humanml_{}_{}'.format(name, niter)
+    log_name = 'eval_animal_{}_{}'.format(name, niter)
     if args.guidance_param != 1.:
         log_name += f'_gscale{args.guidance_param}'
     log_name += f'_{args.eval_mode}'
@@ -257,74 +268,33 @@ if __name__ == '__main__':
     eval_platform_type = eval(args.train_platform_type)
     eval_platform = eval_platform_type(save_dir, name=log_name)
     eval_platform.report_args(args, name='Args')
-
-    print(f'Eval mode [{args.eval_mode}]')
-    if args.eval_mode == 'debug':
-        num_samples_limit = 1000  # None means no limit (eval over all dataset)
-        run_mm = False
-        mm_num_samples = 0
-        mm_num_repeats = 0
-        mm_num_times = 0
-        diversity_times = 300
-        replication_times = 5  # about 3 Hrs
-    elif args.eval_mode == 'wo_mm':
-        num_samples_limit = 1000
-        run_mm = False
-        mm_num_samples = 0
-        mm_num_repeats = 0
-        mm_num_times = 0
-        diversity_times = 300
-        replication_times = 20 # about 12 Hrs
-    elif args.eval_mode == 'mm_short':
-        num_samples_limit = 1000
-        run_mm = True
-        mm_num_samples = 100
-        mm_num_repeats = 30
-        mm_num_times = 10
-        diversity_times = 300
-        replication_times = 5  # about 15 Hrs
-    else:
-        raise ValueError()
+    
+    
+    num_samples_limit = 1000
+    run_mm = False
+    mm_num_samples = 0
+    mm_num_repeats = 0
+    mm_num_times = 10
+    diversity_times = 200
+    replication_times = 20 # about 12 Hrs
 
 
     dist_util.setup_dist(args.device)
     logger.configure()
 
-    logger.log("creating data loader...")
-    split = 'test'
-    gt_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='gt', use_cache=args.use_cache)
-    # gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='eval')
-    # added new features + support for prefix completion:
-    gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='eval',
-                                    fixed_len=args.context_len+args.pred_len, pred_len=args.pred_len, device=dist_util.dev(),
-                                    autoregressive=args.autoregressive, use_cache=args.use_cache)
-
-    num_actions = gen_loader.dataset.num_actions
-
-    logger.log("Creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(args, gen_loader)
-
-    logger.log(f"Loading checkpoints from [{args.model_path}]...")
-    load_saved_model(model, args.model_path, use_avg=args.use_ema)
-
-    if args.guidance_param != 1:
-        model = ClassifierFreeSampleModel(model)   # wrapping model with the classifier-free sampler
-    model.to(dist_util.dev())
-    model.eval()  # disable random masking
-
-    eval_motion_loaders = {
-        ################
-        ## HumanML3D Dataset##
-        ################
-        'vald': lambda: get_mdm_loader(args,
-            model=model, diffusion=diffusion, batch_size=args.batch_size,
-            ground_truth_loader=gen_loader, mm_num_samples=mm_num_samples, mm_num_repeats=mm_num_repeats, 
-            max_motion_length=gt_loader.dataset.opt.max_motion_length, num_samples_limit=num_samples_limit, 
-            scale=args.guidance_param
-        )
-    }
-
+    # Get encoders
     eval_wrapper = EvaluatorMDMWrapper(args.dataset, dist_util.dev())
-    evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replication_times, 
+    text_encoder, motion_encoder, movement_encoder = eval_wrapper.text_encoder, eval_wrapper.motion_encoder, eval_wrapper.movement_encoder
+
+    # Get data eval dataloaders
+    gt_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='gt', use_cache=False)
+    animo_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_animo.npy", use_cache=False)
+    gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results.npy", use_cache=False)
+    all_loaders = {
+        'ground truth': gt_loader,
+        'animo': animo_loader,
+        'generated': gen_loader
+    }
+    evaluation(eval_wrapper, gt_loader, all_loaders, log_file, 10,
                diversity_times, mm_num_times, run_mm=run_mm, eval_platform=eval_platform)
     eval_platform.close()

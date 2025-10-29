@@ -1,10 +1,14 @@
+wandb
+log
 body_models
 glove
 t2m
 kit
 save
+animal*
+dataset/AnimalMotion*
 dataset/HumanML3D
-dataset/t2m_train.npy
+dataset/*.npy
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

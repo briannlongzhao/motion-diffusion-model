@@ -68,8 +68,14 @@ def get_opt(opt_path, device):
         opt.joints_num = 21
         opt.dim_pose = 251
         opt.max_motion_length = 196
-    elif opt.dataset_name == 'animal':
-        opt.data_root = './dataset/AnimalMotion'
+    elif 'animal' in opt.dataset_name:
+        if '_' in opt.dataset_name:
+            animal_category = opt.dataset_name.split('_')[1]
+            opt.data_root = f'./dataset/AnimalMotion/{animal_category}'
+        else:
+            opt.data_root = './dataset/AnimalMotion'
+        assert os.path.exists(opt.data_root), f"Animal category path {opt.data_root} does not exist."
+        print(f"Using animal motion data from {opt.data_root}")
         opt.motion_dir = None
         opt.text_dir = None
         opt.joints_num = 34

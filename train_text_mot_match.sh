@@ -10,11 +10,11 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --account=viscam
-#SBATCH --exclude=viscam1,viscam2,viscam3,viscam4,viscam5,viscam6,viscam7,viscam8
+#SBATCH --exclude=viscam1,viscam2,viscam3,viscam4,viscam6,viscam7,viscam8
 
 #################
 #set a job name
-#SBATCH --job-name="mdm train"
+#SBATCH --job-name="text_mot_match train"
 
 #################
 #a file for job output, you can check job progress, append the job ID with %j to make it unique
@@ -66,18 +66,9 @@ nvidia-smi
 source ~/.bashrc
 conda activate mdm
 
-python -m train.train_mdm \
-    --save_dir save/balanced_bert \
-    --dataset animal \
-    --diffusion_steps 50 \
-    --train_platform_type WandBPlatform \
-    --num_steps 600000 \
-    --batch_size 128 \
-    --arch trans_dec \
-    --text_encoder_type bert \
-    --mask_frames \
-    --use_ema \
-    --overwrite \
-    --use_cache
+python  train_text_mot_match.py \
+    --name text_mot_match \
+    --gpu_id 0 \
+    --batch_size 8
 
 echo "Done"

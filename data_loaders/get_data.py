@@ -25,7 +25,7 @@ def get_dataset_class(name):
         raise ValueError(f'Unsupported dataset name [{name}]')
 
 def get_collate_fn(name, hml_mode='train', pred_len=0, batch_size=1):
-    if hml_mode == 'gt':
+    if hml_mode in ['gt', 'eval']:
         from data_loaders.humanml.data.dataset import collate_fn as t2m_eval_collate
         return t2m_eval_collate
     if name in ["humanml", "kit", "animal"]:
@@ -37,20 +37,20 @@ def get_collate_fn(name, hml_mode='train', pred_len=0, batch_size=1):
 
 
 def get_dataset(name, num_frames, split='train', hml_mode='train', abs_path='.', fixed_len=0, 
-                device=None, autoregressive=False, use_cache=False): 
+                device=None, autoregressive=False, use_cache=False, results_file=None): 
     DATA = get_dataset_class(name)
     if name in ["humanml", "kit", "animal"]:
         dataset = DATA(split=split, num_frames=num_frames, mode=hml_mode, abs_path=abs_path, fixed_len=fixed_len, 
-                       device=device, autoregressive=autoregressive, use_cache=use_cache)
+                       device=device, autoregressive=autoregressive, use_cache=use_cache, results_file=results_file)
     else:
         dataset = DATA(split=split, num_frames=num_frames)
     return dataset
 
 
 def get_dataset_loader(name, batch_size, num_frames, split='train', hml_mode='train', fixed_len=0, pred_len=0, 
-                       device=None, autoregressive=False, use_cache=False):
+                       device=None, autoregressive=False, use_cache=False, results_file="results.npy"):
     dataset = get_dataset(name, num_frames, split=split, hml_mode=hml_mode, fixed_len=fixed_len, 
-                device=device, autoregressive=autoregressive, use_cache=use_cache)
+                device=device, autoregressive=autoregressive, use_cache=use_cache, results_file=results_file)
     
     collate = get_collate_fn(name, hml_mode, pred_len, batch_size)
 

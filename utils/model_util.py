@@ -27,7 +27,7 @@ def get_model_args(args, data):
     clip_version = 'ViT-B/32'
     action_emb = 'tensor'
     cond_mode = get_cond_mode(args)
-    if hasattr(data.dataset, 'num_actions'):
+    if data is not None and hasattr(data.dataset, 'num_actions'):
         num_actions = data.dataset.num_actions
     else:
         num_actions = 1
