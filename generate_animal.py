@@ -72,23 +72,13 @@ def construct_template_variables(unconstrained):
            sample_file_template, row_file_template, all_file_template
 
 
-def load_dataset(args, max_frames, n_frames):
-    data = get_dataset_loader(name=args.dataset,
-                              batch_size=args.batch_size,
-                              num_frames=max_frames,
-                              split='test',
-                              hml_mode='train' if args.pred_len > 0 else 'text_only',  # We need to sample a prefix from the dataset
-                              fixed_len=args.pred_len + args.context_len, pred_len=args.pred_len, device=dist_util.dev())
-    data.fixed_length = n_frames
-    return data
-
 
 def is_substr_in_list(substr, list_of_strs):
     return np.char.find(list_of_strs, substr) != -1  # [substr in string for string in list_of_strs]
 
 
 
-def generate(args, model, text_prompt):  # Single text prompt generation
+def generate(args, model, text_prompt, image_feature=None):  # Single text prompt generation
     motion_shape = (args.batch_size, model.njoints, model.nfeats, n_frames)
 
     collate_args = [{'inp': torch.zeros(n_frames), 'tokens': None, 'lengths': n_frames}] * args.num_samples
@@ -120,6 +110,10 @@ def generate(args, model, text_prompt):  # Single text prompt generation
                                                model_kwargs['y']['text_embed'][1].unsqueeze(0).repeat(args.num_samples, 1, 1))
         else:
             raise NotImplementedError('DiP model only supports BERT text encoder at the moment. If you implement this, please send a PR!')
+        
+    if args.image_condition:
+        assert image_feature is not None, "Image feature must be provided for image-conditioned generation!"
+        model_kwargs['y']['feature'] = torch.as_tensor(image_feature, device=dist_util.dev()).repeat(args.num_samples, 1, 1)
     
     for rep_i in range(args.num_repetitions):
         print(f'### Sampling [repetitions #{rep_i}]')
@@ -177,8 +171,24 @@ def generate(args, model, text_prompt):  # Single text prompt generation
 
 
 
-def save(args, motions, lengths, texts, motion_vecs, out_path, save_video=True, max_vis_samples=6):
-    npy_path = os.path.join(out_path, 'results.npy')
+def get_model_name(args, save_name=None):
+    if save_name is None:
+        model_name = os.path.basename(os.path.dirname(args.model_path))
+        model_name = re.sub(r'[^A-Za-z0-9_-]+', '_', model_name)
+        model_name = re.sub(r'_+', '_', model_name).strip('_')
+    else:
+        model_name = save_name
+    return model_name
+
+
+def get_npy_path(args, out_path, save_name=None):
+    model_name = get_model_name(args, save_name=save_name)
+    return os.path.join(out_path, f'results_{model_name}.npy')
+
+
+def save(args, motions, lengths, texts, motion_vecs, out_path, npy_path, save_video=False, max_vis_samples=3, save_name=None):
+    os.makedirs(out_path, exist_ok=True)
+    model_name = get_model_name(args, save_name=save_name)
     print(f"saving results file to [{npy_path}]")
     np.save(npy_path,
             {'motions': motions, 'motion_vecs': motion_vecs, 'texts': texts, 'lengths': lengths,
@@ -189,7 +199,7 @@ def save(args, motions, lengths, texts, motion_vecs, out_path, save_video=True, 
 
     print(f"saving video to [{out_path}]...")
     skeleton = paramUtil.t2m_animal_kinematic_chain
-
+    
     # Build a mapping from text -> list of motion indices (preserve original behavior)
     text_to_indices = {}
     for idx, txt in enumerate(texts):
@@ -220,12 +230,6 @@ def save(args, motions, lengths, texts, motion_vecs, out_path, save_video=True, 
             safe_text = re.sub(r'_+', '_', safe_text).strip('_')
             if safe_text == '':
                 safe_text = 'text'
-            # append model name (basename of model dir) to filename
-            model_name = os.path.basename(os.path.dirname(args.model_path))
-            model_name = re.sub(r'[^A-Za-z0-9_-]+', '_', model_name)
-            model_name = re.sub(r'_+', '_', model_name).strip('_')
-            if model_name == '':
-                model_name = 'ours'
             # cap filename base to 100 chars
             if len(safe_text) > 100:
                 safe_text = safe_text[:100]
@@ -233,7 +237,7 @@ def save(args, motions, lengths, texts, motion_vecs, out_path, save_video=True, 
             save_file = f"{base_name}.mp4"
             animation_save_path = os.path.join(out_path, save_file)
             gt_frames = np.arange(args.context_len) if args.context_len > 0 and not args.autoregressive else []
-            clip = plot_3d_motion(animation_save_path, skeleton, motion, dataset=args.dataset, title=text_key, fps=fps, gt_frames=gt_frames)
+            clip = plot_3d_motion(animation_save_path, skeleton, motion, dataset="animal", title=text_key, fps=fps, gt_frames=gt_frames)
             clips.append(clip)
 
         # Combine and write the row video
@@ -244,10 +248,6 @@ def save(args, motions, lengths, texts, motion_vecs, out_path, save_video=True, 
             safe_text = re.sub(r'_+', '_', safe_text).strip('_')
             if safe_text == '':
                 safe_text = 'text'
-            model_name = os.path.basename(os.path.dirname(args.model_path))
-            model_name = re.sub(r'[^A-Za-z0-9_-]+', '_', model_name)
-            model_name = re.sub(r'_+', '_', model_name).strip('_')
-            if model_name == '':
                 model_name = 'model'
             base_name = f"{safe_text}_{model_name}"
             if len(base_name) > 100:
@@ -269,7 +269,6 @@ def save(args, motions, lengths, texts, motion_vecs, out_path, save_video=True, 
 if __name__ == "__main__":
     args = generate_args()
     fixseed(args.seed)
-    
     name = os.path.basename(os.path.dirname(args.model_path))
     niter = os.path.basename(args.model_path).replace('model', '').replace('.pt', '')
     max_frames = 196
@@ -293,9 +292,14 @@ if __name__ == "__main__":
     mean = np.load("dataset/AnimalMotion/Mean.npy")
     std = np.load("dataset/AnimalMotion/Std.npy")
     total_num_samples = args.num_samples * args.num_repetitions
+    # args.cond_mask_prob = 0
+    # args.cond_img_prob = 0
 
     print("Creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(args, data)
+
+    args.image_condition = args.image_path is not None or args.image_feature_path is not None
+    model.cond_mode = "text" if not args.image_condition else model.cond_mode
 
     sample_fn = diffusion.p_sample_loop
     if args.autoregressive:
@@ -310,10 +314,18 @@ if __name__ == "__main__":
     model.to(dist_util.dev())
     model.eval()  # disable random masking
 
-
+    image_feature = None
     all_motions, all_lengths, all_text = None, None, None
     if not is_using_data:
-        all_motions, all_text, all_lengths, all_motion_vecs = generate(args, model, args.text_prompt)
+        print(args.image_condition)
+        if args.image_condition:
+            assert args.image_path or args.image_feature_path, "Either image path or image feature path must be provided for image-conditioned generation!"
+            if args.image_path:
+                raise NotImplementedError("Image feature extraction from image path is not implemented yet!")
+                # TODO Get image feature from image path
+            else:
+                image_feature = np.load(args.image_feature_path)
+        all_motions, all_lengths, all_texts, all_motion_vecs = generate(args, model, args.text_prompt, image_feature=image_feature)
         out_path = args.output_dir
         if out_path == '':
             out_path = os.path.join(os.path.dirname(args.model_path), 'samples_{}_{}_seed{}'.format(name, niter, args.seed))
@@ -321,10 +333,17 @@ if __name__ == "__main__":
         if os.path.exists(out_path):
             shutil.rmtree(out_path)
         os.makedirs(out_path)
-        save(args, all_motions, all_lengths, all_text, all_motion_vecs, out_path, save_video=True)
-    else: # is_using_data
+        all_motions = np.transpose(all_motions, (0, 3, 1, 2))
+        npy_path = get_npy_path(args, out_path)
+        save(args, all_motions, all_lengths, all_texts, all_motion_vecs, out_path, npy_path, save_video=False)
+    elif args.test_dataset.lower() == "animal":
         all_sequence_dirs = get_all_sequence_dirs(args.test_data_dir)
+        np.random.shuffle(all_sequence_dirs)
         for seq_dir in tqdm(all_sequence_dirs, total=len(all_sequence_dirs)):
+            npy_path = get_npy_path(args, seq_dir, save_name=args.save_name)
+            if os.path.exists(npy_path):
+                print(f'Results file already exists [{npy_path}]. Skipping sequence directory [{seq_dir}]...')
+                continue
             print(f'Processing sequence directory [{seq_dir}]...')
             text_file = os.path.join(seq_dir, 'texts_gemini.txt')
             with open(text_file, 'r') as f:
@@ -332,6 +351,48 @@ if __name__ == "__main__":
             all_text_input = []
             for line in text_lines:
                 all_text_input.append(line.split('#')[0].strip())
+            image_feature = None
+            if args.image_condition:
+                # Load image feature
+                image_feature = np.load(os.path.join(seq_dir, "mean_feature_dinov3.npy"))
+            all_motions, all_lengths, all_texts, all_motion_vecs = [], [], [], []
+            for text in all_text_input:
+                print(f'Generating samples for text prompt: [{text}]')
+                motions, lengths, texts, motion_vecs = generate(args, model, text, image_feature=image_feature)
+                all_motions.append(motions)
+                all_lengths.append(lengths)
+                all_texts.extend(texts)
+                all_motion_vecs.append(motion_vecs)
+            all_motions = np.concatenate(all_motions, axis=0)
+            all_motions = np.transpose(all_motions, (0, 3, 1, 2))
+            all_lengths = np.concatenate(all_lengths, axis=0)
+            all_motion_vecs = np.concatenate(all_motion_vecs, axis=0)
+            save(args, all_motions, all_lengths, all_texts, all_motion_vecs, seq_dir, npy_path, save_video=False, max_vis_samples=1, save_name=args.save_name)
+    elif args.test_dataset.lower() == "animalml3d":
+        # For AnimalML3D, generate on all sequences (not filtered by test.txt)
+        caption_dir = os.path.join(args.test_data_dir, 'motion_captions')
+        save_dir = os.path.join(args.test_data_dir, 'output')
+        print(f'Generating AnimalML3D motions from all sequences in: [{args.test_data_dir}]')
+        all_captions = os.listdir(caption_dir)
+        all_captions = sorted(all_captions)
+        print(f'Processing {len(all_captions)} total sequences')
+        
+        for name in tqdm(all_captions):
+            out_path = os.path.join(save_dir, name)
+            npy_path = get_npy_path(args, out_path, save_name=args.save_name)
+            if os.path.exists(npy_path):
+                print(f'Results file already exists [{npy_path}]. Skipping sequence directory [{name}]...')
+                continue
+            text_file = os.path.join(caption_dir, name, "screenshots.txt")
+            if not os.path.exists(text_file):
+                print(f'Text file not found [{text_file}]. Skipping sequence [{name}]...')
+                continue
+            all_text_input = []
+            with open(text_file, 'r') as f:
+                all_text_input = [line.strip() for line in f.readlines()]
+            if len(all_text_input) == 0:
+                print(f'No text input found in directory [{os.path.join(caption_dir, name)}]. Skipping...')
+                continue
             all_motions, all_lengths, all_texts, all_motion_vecs = [], [], [], []
             for text in all_text_input:
                 print(f'Generating samples for text prompt: [{text}]')
@@ -344,7 +405,8 @@ if __name__ == "__main__":
             all_motions = np.transpose(all_motions, (0, 3, 1, 2))
             all_lengths = np.concatenate(all_lengths, axis=0)
             all_motion_vecs = np.concatenate(all_motion_vecs, axis=0)
-            save(args, all_motions, all_lengths, all_texts, all_motion_vecs, seq_dir, save_video=True, max_vis_samples=1)
+            save(args, all_motions, all_lengths, all_texts, all_motion_vecs, out_path, npy_path, save_video=False, max_vis_samples=1, save_name=args.save_name)
+            
 
 
     

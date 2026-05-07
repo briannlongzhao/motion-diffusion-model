@@ -123,6 +123,27 @@ def plot_3d_motion(save_path, kinematic_tree, joints, title, dataset, figsize=(3
                 linewidth = 2.0
             ax.plot3D(data[index, chain, 0], data[index, chain, 1], data[index, chain, 2], linewidth=linewidth,
                       color=color)
+
+        # Draw root trajectory projected on the floor in the current local frame.
+        # Keep it slightly above the plane and high-contrast for reliable visibility.
+        traj_hist = trajec[:index + 1] - trajec[index:index + 1]
+        floor_y = np.full(traj_hist.shape[0], 0.02)
+        if traj_hist.shape[0] > 1:
+            ax.plot3D(
+                traj_hist[:, 0],
+                floor_y,
+                traj_hist[:, 1],
+                linewidth=3.0,
+                color='#00E5FF',
+                alpha=1.0,
+            )
+        ax.scatter(
+            traj_hist[-1, 0],
+            floor_y[-1],
+            traj_hist[-1, 1],
+            color='#FF2D55',
+            s=36,
+        )
         #         print(trajec[:index, 0].shape)
 
         plt.axis('off')

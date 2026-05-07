@@ -6,7 +6,7 @@ import argparse
 
 from data_loaders.humanml.networks.modules import *
 from data_loaders.humanml.networks.trainers import TextMotionMatchTrainer
-from data_loaders.humanml.data.dataset import Text2MotionDatasetV2, collate_fn, Text2MotionDatasetAnimal
+from data_loaders.humanml.data.dataset import Text2MotionDatasetV2, collate_fn, Text2MotionDatasetAnimal, Text2MotionDatasetAnimalML3D
 from data_loaders.humanml.scripts.motion_process import *
 from torch.utils.data import DataLoader
 from data_loaders.humanml.utils.word_vectorizer import WordVectorizer, POS_enumerator
@@ -78,14 +78,22 @@ def build_models(opt):
 if __name__ == '__main__':
     parser = TrainTexMotMatchOptions()
     opt = parser.parse()
-    opt.data_root = "dataset/AnimalMotion"
+
+    if "animalml3d" in opt.dataset_name.lower():
+        opt.data_root = "dataset/AnimalML3D"
+    else:
+        opt.data_root = "dataset/AnimalMotion"
+
+    if "animalml3d" in opt.dataset_name.lower():
+        save_root = "./animalml3d"
+    else:
+        save_root = "./animal_unified"
+   
     opt.device = torch.device("cpu" if opt.gpu_id==-1 else "cuda:" + str(opt.gpu_id))
     torch.autograd.set_detect_anomaly(True)
     if opt.gpu_id != -1:
         # self.opt.gpu_id = int(self.opt.gpu_id)
         torch.cuda.set_device(opt.gpu_id)
-
-    save_root = "./animal_unified"
 
     opt.save_root = pjoin(save_root, opt.name)
     opt.model_dir = pjoin(opt.save_root, 'model')
@@ -101,7 +109,7 @@ if __name__ == '__main__':
     # opt.text_dir = pjoin(opt.data_root, 'texts')
     opt.joints_num = 34
     opt.max_motion_length = 196
-    dim_pose = 311 if "unified" in save_root else 407
+    dim_pose = 311 if "unified" in save_root or "animalml3d" in save_root else 407
     num_classes = 200 // opt.unit_length
     meta_root = pjoin(save_root, 'Comp_v6_KLD01', 'meta')
 
@@ -111,6 +119,8 @@ if __name__ == '__main__':
 
     mean = np.load("dataset/AnimalMotion/Mean.npy")
     std = np.load("dataset/AnimalMotion/Std.npy")
+    # mean = np.load("dataset/AnimalML3D/Mean.npy")
+    # std = np.load("dataset/AnimalML3D/Std.npy")
 
     w_vectorizer = WordVectorizer('./glove', 'our_vab')
     train_split_file = pjoin(opt.data_root, 'train.txt')
@@ -129,12 +139,17 @@ if __name__ == '__main__':
 
     trainer = TextMotionMatchTrainer(opt, text_encoder, motion_encoder, movement_encoder)
 
+    opt.image_condition = False
     opt.use_cache = True
     opt.unify_joints = True
-    opt.unify_joints_mean = "./animal_unified/mean_unified.npy"
-    opt.unify_joints_std = "./animal_unified/std_unified.npy"
-    train_dataset = Text2MotionDatasetAnimal(opt, mean, std, train_split_file, w_vectorizer)
-    val_dataset = Text2MotionDatasetAnimal(opt, mean, std, val_split_file, w_vectorizer)
+    opt.unify_joints_mean = "./animalml3d/mean_unified.npy"
+    opt.unify_joints_std = "./animalml3d/std_unified.npy"
+    if "animalml3d" in opt.data_root.lower():
+        train_dataset = Text2MotionDatasetAnimalML3D(opt, mean, std, train_split_file, w_vectorizer)
+        val_dataset = Text2MotionDatasetAnimalML3D(opt, mean, std, val_split_file, w_vectorizer)
+    else:
+        train_dataset = Text2MotionDatasetAnimal(opt, mean, std, train_split_file, w_vectorizer)
+        val_dataset = Text2MotionDatasetAnimal(opt, mean, std, val_split_file, w_vectorizer)
 
     train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, drop_last=True, num_workers=4,
                               shuffle=True, collate_fn=collate_fn, pin_memory=True)

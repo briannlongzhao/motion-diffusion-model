@@ -182,6 +182,9 @@ smal_to_unified_joint_map = {
     25: 23, 26: 24, 27: 25,
 }
 
+unified_parents = [-1, 0, 1, 2, 3, 3, 3, 1, 7, 8, 9,  1, 11, 12, 13, 0, 15, 16, 17, 0, 19, 20, 21, 0, 23, 24]
+
+
 def unify_animo_joints(animo_joints):
     assert animo_joints.shape[1] == 30
     unified_joints = np.zeros((animo_joints.shape[0], 26, 3))

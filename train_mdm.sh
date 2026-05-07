@@ -66,18 +66,39 @@ nvidia-smi
 source ~/.bashrc
 conda activate mdm
 
+# python -m train.train_mdm \
+#     --save_dir save/image_global_clip \
+#     --dataset animal \
+#     --diffusion_steps 50 \
+#     --train_platform_type WandBPlatform \
+#     --num_steps 600000 \
+#     --batch_size 128 \
+#     --arch trans_dec \
+#     --text_encoder_type bert \
+#     --emb_policy concat \
+#     --image_condition \
+#     --mask_frames \
+#     --use_ema \
+#     --overwrite \
+#     --use_cache \
+# 	--grad_clip_norm 0.5 \
+# 	--resume
+
 python -m train.train_mdm \
-    --save_dir save/balanced_bert \
+    --save_dir save/mdm_baseline \
     --dataset animal \
     --diffusion_steps 50 \
     --train_platform_type WandBPlatform \
     --num_steps 600000 \
     --batch_size 128 \
-    --arch trans_dec \
-    --text_encoder_type bert \
+    --arch trans_enc \
+    --text_encoder_type clip \
+    --emb_policy concat \
     --mask_frames \
     --use_ema \
     --overwrite \
-    --use_cache
+    --use_cache \
+	--grad_clip_norm 0.5 \
+	--resume
 
 echo "Done"

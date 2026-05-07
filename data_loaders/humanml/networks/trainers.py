@@ -940,6 +940,8 @@ class TextMotionMatchTrainer(object):
         self.movement_encoder.eval()
 
     def forward(self, batch_data):
+        if len(batch_data) == 8:  # including dino features
+            batch_data = batch_data[:-1]
         word_emb, pos_ohot, caption, cap_lens, motions, m_lens, _ = batch_data
         word_emb = word_emb.detach().to(self.device).float()
         pos_ohot = pos_ohot.detach().to(self.device).float()

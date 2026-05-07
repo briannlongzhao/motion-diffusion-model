@@ -14,6 +14,7 @@ from utils import dist_util
 from data_loaders.get_data import get_dataset_loader
 from utils.sampler_util import ClassifierFreeSampleModel
 from train.train_platforms import ClearmlPlatform, TensorboardPlatform, NoPlatform, WandBPlatform  # required for the eval operation
+from data_loaders.humanml.utils.paramUtil import unified_parents
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -100,7 +101,12 @@ def evaluate_diversity(activation_dict, file, diversity_times):
     eval_dict = OrderedDict({})
     print('========== Evaluating Diversity ==========')
     for model_name, motion_embeddings in activation_dict.items():
-        diversity = calculate_diversity(motion_embeddings, diversity_times)
+        # Ensure diversity_times is less than available samples
+        num_samples = motion_embeddings.shape[0]
+        actual_diversity_times = min(diversity_times, num_samples - 1) if num_samples > 1 else 1
+        if actual_diversity_times < diversity_times:
+            print(f'---> [{model_name}] Adjusting diversity_times from {diversity_times} to {actual_diversity_times} (available samples: {num_samples})')
+        diversity = calculate_diversity(motion_embeddings, actual_diversity_times)
         eval_dict[model_name] = diversity
         print(f'---> [{model_name}] Diversity: {diversity:.4f}')
         print(f'---> [{model_name}] Diversity: {diversity:.4f}', file=file, flush=True)
@@ -129,6 +135,11 @@ def evaluate_multimodality(eval_wrapper, mm_motion_loaders, file, mm_num_times):
         for caption, motion_embeddings in caption_to_motion_embeddings.items():
             caption_to_motion_embeddings[caption] = torch.stack(motion_embeddings, dim=0)
         for caption, motion_embeddings in caption_to_motion_embeddings.items():
+            num_samples = motion_embeddings.shape[0]
+            if num_samples < 2:
+                print(f'WARNING: Caption "{caption}" has only {num_samples} sample(s), skipping multimodality calculation')
+                print(f'WARNING: Caption "{caption}" has only {num_samples} sample(s), skipping multimodality calculation', file=file, flush=True)
+                continue
             multimodality += calculate_multimodality(motion_embeddings.cpu().numpy(), mm_num_times)
         multimodality /= len(caption_to_motion_embeddings)
         print(f'---> [{model_name}] Multimodality: {multimodality:.4f}')
@@ -138,6 +149,10 @@ def evaluate_multimodality(eval_wrapper, mm_motion_loaders, file, mm_num_times):
 
 
 def calculate_multimodality(activation, multimodality_times):
+    # Need at least 2 samples to calculate multimodality
+    if activation.shape[0] < 2:
+        print(f'ERROR: calculate_multimodality called with only {activation.shape[0]} sample(s), need at least 2')
+        return 0.0
     first_dices, second_dices = [], []
     for i in range(multimodality_times):
         choices = np.random.choice(activation.shape[0], 2, replace=False)
@@ -147,6 +162,48 @@ def calculate_multimodality(activation, multimodality_times):
     second_dices = np.array(second_dices)
     dist = linalg.norm(activation[first_dices] - activation[second_dices], axis=1)
     return dist.mean()
+
+
+def evaluate_bone_length_variance(eval_wrapper, motion_loaders, file, num_sample=1000):
+    bone_length_variance_dict = OrderedDict({})
+    print('========== Evaluating Bone Length Variance ==========')
+    for motion_loader_name, motion_loader in motion_loaders.items():
+        all_bone_lengths = []
+        with torch.no_grad():
+            for idx, batch in enumerate(motion_loader):
+                _, _, _, _, motions, m_lens, _ = batch
+                bone_lengths = get_bone_length(
+                    motions=motions,
+                )
+                all_bone_lengths.append(bone_lengths.cpu().numpy().T)
+        all_bone_lengths = np.concatenate(all_bone_lengths, axis=0)
+        # Ensure we don't sample more items than available
+        actual_sample_size = min(num_sample, all_bone_lengths.shape[0])
+        random_indices = np.random.choice(all_bone_lengths.shape[0], actual_sample_size, replace=False)
+        all_bone_lengths = all_bone_lengths[random_indices]
+        bone_length_variance = np.var(all_bone_lengths)
+        bone_length_variance_dict[motion_loader_name] = bone_length_variance
+        print(f'---> [{motion_loader_name}] Bone Length Variance: {bone_length_variance:.6f}')
+        print(f'---> [{motion_loader_name}] Bone Length Variance: {bone_length_variance:.6f}', file=file, flush=True)
+    return bone_length_variance_dict
+
+
+def get_bone_length(motions, num_joints=26):
+    ric_data = motions[:, :, 4:4+3*(num_joints-1)]
+    ric_data = ric_data.view(motions.shape[0], motions.shape[1], num_joints - 1, 3)
+    root_y = motions[:, :, 3:4]
+    root_pos_local = torch.zeros(ric_data.shape[0], ric_data.shape[1], 1, 3, device=motions.device)
+    root_pos_local[..., 0, 1] = root_y.squeeze(-1)
+    full_positions = torch.cat([root_pos_local, ric_data], dim=2)
+    bone_lengths = []
+    for joint_idx in range(1, num_joints):  # Skip root (joint 0)
+        parent_idx = unified_parents[joint_idx]
+        bone_vector = full_positions[:, :, joint_idx, :] - full_positions[:, :, parent_idx, :]
+        bone_length = torch.norm(bone_vector, dim=-1).mean(dim=1).squeeze(0)  # Average across frames
+        bone_lengths.append(bone_length)
+    bone_lengths = torch.stack(bone_lengths)
+    return bone_lengths
+
 
 
 def get_metric_statistics(values, replication_times):
@@ -163,13 +220,18 @@ def evaluation(eval_wrapper, gt_loader, motion_loaders, log_file, replication_ti
                                    'R_precision': OrderedDict({}),
                                    'FID': OrderedDict({}),
                                    'Diversity': OrderedDict({}),
-                                   'MultiModality': OrderedDict({})})
+                                   'MultiModality': OrderedDict({}),
+                                   'Bone Length Variance': OrderedDict({})})
         for replication in range(replication_times):
             print(f'==================== Replication {replication} ====================')
             print(f'==================== Replication {replication} ====================', file=f, flush=True)
             print(f'Time: {datetime.now()}')
             print(f'Time: {datetime.now()}', file=f, flush=True)
             mat_score_dict, R_precision_dict, acti_dict = evaluate_matching_score(eval_wrapper, motion_loaders, f)
+
+            print(f'Time: {datetime.now()}')
+            print(f'Time: {datetime.now()}', file=f, flush=True)
+            bone_length_variance_dict = evaluate_bone_length_variance(eval_wrapper, motion_loaders, f)
 
             print(f'Time: {datetime.now()}')
             print(f'Time: {datetime.now()}', file=f, flush=True)
@@ -197,6 +259,12 @@ def evaluation(eval_wrapper, gt_loader, motion_loaders, log_file, replication_ti
                     all_metrics['R_precision'][key] = [item]
                 else:
                     all_metrics['R_precision'][key] += [item]
+
+            for key, item in bone_length_variance_dict.items():
+                if key not in all_metrics['Bone Length Variance']:
+                    all_metrics['Bone Length Variance'][key] = [item]
+                else:
+                    all_metrics['Bone Length Variance'][key] += [item]
 
             for key, item in fid_score_dict.items():
                 if key not in all_metrics['FID']:
@@ -251,16 +319,12 @@ def evaluation(eval_wrapper, gt_loader, motion_loaders, log_file, replication_ti
 
 
 if __name__ == '__main__':
+    # log_name = "animalml3d"
+    log_name = "animalmotion"
     args = evaluation_parser()
     fixseed(args.seed)
     args.batch_size = 32 # This must be 32! Don't change it! otherwise it will cause a bug in R precision calc!
-    name = os.path.basename(os.path.dirname(args.model_path))
-    niter = os.path.basename(args.model_path).replace('model', '').replace('.pt', '')
-    log_name = 'eval_animal_{}_{}'.format(name, niter)
-    if args.guidance_param != 1.:
-        log_name += f'_gscale{args.guidance_param}'
-    log_name += f'_{args.eval_mode}'
-    log_file = os.path.join(os.path.dirname(args.model_path), log_name + '.log')
+    log_file = os.path.join("save", log_name + '.log')
     save_dir = os.path.dirname(log_file)  # has not been tested with WandB
 
     print(f'Will save to log file [{log_file}]')
@@ -270,13 +334,12 @@ if __name__ == '__main__':
     eval_platform.report_args(args, name='Args')
     
     
-    num_samples_limit = 1000
-    run_mm = False
+    num_samples_limit = 5000
     mm_num_samples = 0
     mm_num_repeats = 0
     mm_num_times = 10
     diversity_times = 200
-    replication_times = 20 # about 12 Hrs
+    replication_times = 10 # about 12 Hrs
 
 
     dist_util.setup_dist(args.device)
@@ -287,14 +350,33 @@ if __name__ == '__main__':
     text_encoder, motion_encoder, movement_encoder = eval_wrapper.text_encoder, eval_wrapper.motion_encoder, eval_wrapper.movement_encoder
 
     # Get data eval dataloaders
-    gt_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='gt', use_cache=False)
-    animo_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_animo.npy", use_cache=False)
-    gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results.npy", use_cache=False)
+    gt_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='gt', use_cache=True, max_samples=args.max_eval_samples)
+   
+    animo = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_animo.npy", use_cache=False, max_samples=args.max_eval_samples)
+    animo_ours = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_animo_ours.npy", use_cache=False, max_samples=args.max_eval_samples)
+    
+    # no_image = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_bert_concat_global.npy", use_cache=False)
+    # with_image = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_image.npy", use_cache=False)
+    # with_image_cond01 = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_image_cond0.1.npy", use_cache=False)
+    with_image_cond01_clip05 = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_image_cond0.1_clip0.5.npy", use_cache=False, max_samples=args.max_eval_samples)
+
+
+    # bert_add = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_image_bert_add.npy", use_cache=False)
+    # clip_add = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_image_clip_add.npy", use_cache=False)
+
+    # balanced = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_balanced.npy", use_cache=False)
+    # unbalanced = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split='test', hml_mode='eval', results_file="results_unbalanced.npy", use_cache=False)
+
     all_loaders = {
         'ground truth': gt_loader,
-        'animo': animo_loader,
-        'generated': gen_loader
+        'animo': animo,
+        'animo_ours': animo_ours,
+        # 'no_image': no_image,
+        # 'with_image': with_image,
+        # 'with_image_cond0.1': with_image_cond01,
+        'with_image_cond0.1_clip0.5': with_image_cond01_clip05,
+        # 'bert_add': bert_add,
     }
     evaluation(eval_wrapper, gt_loader, all_loaders, log_file, 10,
-               diversity_times, mm_num_times, run_mm=run_mm, eval_platform=eval_platform)
+               diversity_times, mm_num_times, eval_platform=eval_platform)
     eval_platform.close()

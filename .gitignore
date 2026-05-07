@@ -9,6 +9,7 @@ animal*
 dataset/AnimalMotion*
 dataset/HumanML3D
 dataset/*.npy
+dataset/AnimalML3D
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

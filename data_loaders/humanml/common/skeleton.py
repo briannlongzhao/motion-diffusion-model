@@ -92,7 +92,10 @@ class Skeleton(object):
                 # print(u.shape)
                 # (batch, 3)
                 v = joints[:, chain[j+1]] - joints[:, chain[j]]  # data bone direction for joint j+1 in the chain
-                v = v / np.sqrt((v**2).sum(axis=-1))[:, np.newaxis]
+                v_length = np.sqrt((v**2).sum(axis=-1))[:, np.newaxis]
+                # Avoid zero division by adding small epsilon
+                v_length = np.maximum(v_length, 1e-8)
+                v = v / v_length
                 # print(u.shape, v.shape)
                 rot_u_v = qbetween_np(u, v)  # angle betweem rest-pose bone and data bone (bone is j to j+1)
 

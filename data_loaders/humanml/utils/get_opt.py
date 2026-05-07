@@ -68,6 +68,13 @@ def get_opt(opt_path, device):
         opt.joints_num = 21
         opt.dim_pose = 251
         opt.max_motion_length = 196
+    elif opt.dataset_name == 'animalml3d':
+        opt.motion_dir = None
+        opt.text_dir = None
+        opt.joints_num = 26
+        opt.dim_pose = 311
+        opt.max_motion_length = 196
+        opt.data_root = './dataset/AnimalML3D'
     elif 'animal' in opt.dataset_name:
         if '_' in opt.dataset_name:
             animal_category = opt.dataset_name.split('_')[1]

@@ -21,11 +21,15 @@ import random
 from copy import copy, deepcopy
 from sklearn.model_selection import train_test_split
 
-joints_file_name = "joints.npy"
-new_joints_file_name = "new_joints.npy"
-vecs_file_name = "new_joint_vecs.npy"
+joints_file_name = "joints_global.npy"
+new_joints_file_name = "new_joints_global.npy"
+vecs_file_name = "new_joint_vecs_global.npy"
 # data_dir = "/viscam/projects/animal_motion/data/data_test"
 data_dir = "/viscam/projects/animal_motion/briannlz/video_object_processing/data/track_3.0.0/"
+# data_dir = "dataset/AnimalML3D"
+
+# Save in same directory for animal dataset, false for animalml3d
+save_in_same_dir = True
 
 # Configuration for your dataset (adjust these parameters as needed)
 # Lower legs
@@ -723,6 +727,10 @@ def validate_recovery(positions, feature_data, joints_num):
 
 
 def get_all_files(data_dir, file_name):
+    if "animalml3d" in data_dir.lower():
+        joints_dir = os.path.join(data_dir, "animals_smal_joints")
+        all_files = [os.path.join(joints_dir, f) for f in os.listdir(joints_dir)]
+        return all_files
     all_files = []
     for root, _, files in tqdm(os.walk(data_dir)):
         for f in files:
@@ -817,14 +825,25 @@ if __name__ == "__main__":
             # print(f"Recovery error: {error:.6f} for {joint_file_path}")
 
             all_data.append(data)
-            all_ids.append(os.path.basename(os.path.dirname(joint_file_path)))
+            if save_in_same_dir:
+                all_ids.append(os.path.basename(os.path.dirname(joint_file_path)))
+            else:
+                all_ids.append(os.path.splitext(os.path.basename(joint_file_path))[0])
             
             # debug recovered joints
             # debug_save_joints(recovered_joints)
-            
-            # Generate output paths by replacing suffix
-            vecs_file_path = joint_file_path.replace(joints_file_name, vecs_file_name)
-            joints_file_path = joint_file_path.replace(joints_file_name, new_joints_file_name)
+
+            if save_in_same_dir:
+                # Generate output paths by replacing suffix
+                vecs_file_path = joint_file_path.replace(joints_file_name, vecs_file_name)
+                joints_file_path = joint_file_path.replace(joints_file_name, new_joints_file_name)
+            else:
+                new_joints_dir = pjoin(data_dir, "new_joints")
+                vecs_save_dir = pjoin(data_dir, "new_joint_vecs")
+                os.makedirs(new_joints_dir, exist_ok=True)
+                os.makedirs(vecs_save_dir, exist_ok=True)
+                vecs_file_path = pjoin(vecs_save_dir, os.path.basename(joint_file_path))
+                joints_file_path = pjoin(new_joints_dir, os.path.basename(joint_file_path))
 
             # Save feature vectors
             np.save(vecs_file_path, data)
@@ -842,6 +861,8 @@ if __name__ == "__main__":
         np.save(pjoin(data_dir, 'Mean.npy'), mean)
         np.save(pjoin(data_dir, 'Std.npy'), std)
         train_ids, test_ids = train_test_split(all_ids, test_size=0.01, random_state=42)
+        if "animalml3d" in data_dir.lower():
+            train_ids = all_ids
         with open(pjoin(data_dir, 'train.txt'), 'w') as f:
             for item in train_ids:
                 f.write("%s\n" % item)

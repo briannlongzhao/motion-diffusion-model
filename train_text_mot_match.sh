@@ -68,6 +68,7 @@ conda activate mdm
 
 python  train_text_mot_match.py \
     --name text_mot_match \
+    --dataset_name animalml3d \
     --gpu_id 0 \
     --batch_size 8
 

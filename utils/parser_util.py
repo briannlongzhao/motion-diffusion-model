@@ -16,7 +16,7 @@ def parse_and_load_from_model(parser):
         args_to_overwrite += get_args_per_group_name(parser, args, group_name)
 
     # load args from model
-    if args.model_path != '':  # if not using external results file
+    if args.model_path is not None and args.model_path != '':  # if not using external results file
         args = load_args_from_model(args, args_to_overwrite)
 
     if args.cond_mask_prob == 0:
@@ -105,8 +105,11 @@ def add_model_options(parser):
                        help="Number of layers.")
     group.add_argument("--latent_dim", default=512, type=int,
                        help="Transformer/GRU width.")
-    group.add_argument("--cond_mask_prob", default=.1, type=float,
+    group.add_argument("--cond_mask_prob", default=.2, type=float,
                        help="The probability of masking the condition during training."
+                            " For classifier-free guidance learning.")
+    group.add_argument("--cond_img_prob", default=.2, type=float,
+                       help="The probability of using image condition during training."
                             " For classifier-free guidance learning.")
     group.add_argument("--mask_frames", action='store_true', help="If true, will fix Rotem's bug and mask invalid frames.")
     group.add_argument("--lambda_rcxyz", default=0.0, type=float, help="Joint positions loss.")
@@ -120,7 +123,8 @@ def add_model_options(parser):
                        help="Pose embedding max length.")
     group.add_argument("--use_ema", action='store_true',
                     help="If True, will use EMA model averaging.")
-    
+    group.add_argument("--emb_policy", default='add', choices=['concat', 'add'], type=str,
+                       help="Policy for embedding image and text features.")
 
     group.add_argument("--multi_target_cond", action='store_true', help="If true, enable multi-target conditioning (aka Sigal's model).")
     group.add_argument("--multi_encoder_type", default='single', choices=['single', 'multi', 'split'], type=str, help="Specifies the encoder type to be used for the multi joint condition.")
@@ -136,12 +140,14 @@ def add_model_options(parser):
 
 def add_data_options(parser):
     group = parser.add_argument_group('dataset')
-    group.add_argument("--dataset", default='humanml', choices=['humanml', 'kit', 'humanact12', 'uestc', 'animal'], type=str,
+    group.add_argument("--dataset", default='humanml', choices=['humanml', 'kit', 'humanact12', 'uestc', 'animal', 'animalml3d'], type=str,
                        help="Dataset name (choose from list).")
     group.add_argument("--data_dir", default="", type=str,
                        help="If empty, will use defaults according to the specified dataset.")
     group.add_argument("--use_cache", action="store_true",
                        help="Use cached .npy data")
+    group.add_argument("--image_condition", action="store_true",
+                       help="If true, will use image condition for animal motion generation.")
 
 
 def add_training_options(parser):
@@ -153,6 +159,7 @@ def add_training_options(parser):
     group.add_argument("--lr", default=1e-4, type=float, help="Learning rate.")
     group.add_argument("--weight_decay", default=0.0, type=float, help="Optimizer weight decay.")
     group.add_argument("--lr_anneal_steps", default=0, type=int, help="Number of learning rate anneal steps.")
+    group.add_argument("--grad_clip_norm", default=1.0, type=float, help="Gradient clipping max norm. If None, no clipping is applied.")
     group.add_argument("--eval_batch_size", default=32, type=int,
                        help="Batch size during evaluation loop. Do not change this unless you know what you are doing. "
                             "T2m precision calculation is based on fixed batch size 32.")
@@ -235,6 +242,10 @@ def add_generate_options(parser):
                        help="An action name to be generated. If empty, will take text prompts from dataset.")
     group.add_argument("--target_joint_names", default='DIMP_FINAL', type=str, help="Force single joint configuration by specifing the joints (coma separated). If None - will use the random mode for all end effectors.")
     group.add_argument("--test_data_dir", default=None, type=str, help="Test data directory for animal motion generartion")
+    group.add_argument("--image_feature_path", default=None, type=str, help="Path to image features npy file for animal motion generation.")
+    group.add_argument("--image_path", default=None, type=str, help="Path to image file for animal motion generation.")
+    group.add_argument("--save_name", default=None, type=str, help="Subfolder name for saving generation results.")
+    group.add_argument("--test_dataset", default="animal", type=str, choices=['animal', 'animalml3d'], help="Test dataset for animal motion generation.")
 
 def add_edit_options(parser):
     group = parser.add_argument_group('edit')
@@ -255,13 +266,15 @@ def add_edit_options(parser):
 
 def add_evaluation_options(parser):
     group = parser.add_argument_group('eval')
-    group.add_argument("--model_path", required=True, type=str,
+    group.add_argument("--model_path", type=str,
                        help="Path to model####.pt file to be sampled.")
     group.add_argument("--eval_mode", default='wo_mm', choices=['wo_mm', 'mm_short', 'debug', 'full'], type=str,
                        help="wo_mm (t2m only) - 20 repetitions without multi-modality metric; "
                             "mm_short (t2m only) - 5 repetitions with multi-modality metric; "
                             "debug - short run, less accurate results."
                             "full (a2m only) - 20 repetitions.")
+    group.add_argument("--max_eval_samples", type=int, default=None,
+                       help="Maximum number of samples to use for evaluation. If None, use all samples.")
     group.add_argument("--autoregressive", action='store_true', help="If true, and we use a prefix model will generate motions in an autoregressive loop.")
     group.add_argument("--autoregressive_include_prefix", action='store_true', help="If true, include the init prefix in the output, otherwise, will drop it.")
     group.add_argument("--autoregressive_init", default='data', type=str, choices=['data', 'isaac'], 
@@ -277,6 +290,8 @@ def get_cond_mode(args):
         cond_mode = 'text'
     else:
         cond_mode = 'action'
+    if args.image_condition:
+        cond_mode += ',image'
     return cond_mode
 
 
@@ -299,7 +314,7 @@ def generate_args():
     args = parse_and_load_from_model(parser)
     cond_mode = get_cond_mode(args)
 
-    if (args.input_text or args.text_prompt) and cond_mode != 'text':
+    if (args.input_text or args.text_prompt) and "text" not in cond_mode:
         raise Exception('Arguments input_text and text_prompt should not be used for an action condition. Please use action_file or action_name.')
     elif (args.action_file or args.action_name) and cond_mode != 'action':
         raise Exception('Arguments action_file and action_name should not be used for a text condition. Please use input_text or text_prompt.')

@@ -10,7 +10,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --account=viscam
-#SBATCH --exclude=viscam1,viscam2,viscam3,viscam4,viscam5,viscam6,viscam7,viscam8,viscam14
+#SBATCH --exclude=viscam1
 
 #################
 #set a job name
@@ -66,11 +66,7 @@ nvidia-smi
 source ~/.bashrc
 conda activate mdm
 
-python generate_animal.py \
-	--model_path ./save/my_animal_all_cat_clip/model000600060.pt \
-	--num_samples 2 \
-	--num_repetitions 5 \
-	--motion_length 20  \
-    --test_data_dir "/viscam/projects/animal_motion/briannlz/video_object_processing/data/data_3.0.0/test/"
+python generate_animal.py --test_data_dir=dataset/AnimalML3D/ --test_dataset=animalml3d --model_path=save/image_cond0.1_clip0.5/model000100000.pt --save_name=image_cond0.1_clip0.5 --num_samples=2 --num_repetitions=5 --motion_length=20 
+# python generate_animal.py --model_path=save/image_cond0.1_clip0.5/model000100000.pt --save_name=image_cond0.1_clip0.5 --num_samples=2 --num_repetitions=5 --motion_length=20 --test_data_dir=/viscam/projects/animal_motion/briannlz/video_object_processing/data/data_3.0.0/test/ --image_condition
 
 echo "Done"

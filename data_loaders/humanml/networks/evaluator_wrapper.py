@@ -110,6 +110,8 @@ def build_evaluators(opt):
         ckpt_dir = 't2m'
     elif opt['dataset_name'] == 'animal':
         ckpt_dir = 'animal_unified'
+    elif opt['dataset_name'] == 'animalml3d':
+        ckpt_dir = 'animalml3d'
 
     checkpoint = torch.load(pjoin(opt['checkpoints_dir'], ckpt_dir, 'text_mot_match', 'model', 'finest.tar'),
                             map_location=opt['device'])
@@ -142,6 +144,8 @@ class EvaluatorMDMWrapper(object):
 
         if dataset_name == 'animal':
             opt['dim_pose'] = 311  # unified dim_pose for animal
+        elif dataset_name == 'animalml3d':
+            opt['dim_pose'] = 311  # unified dim_pose for animalml3d
 
         self.text_encoder, self.motion_encoder, self.movement_encoder = build_evaluators(opt)
         self.opt = opt

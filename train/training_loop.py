@@ -74,6 +74,7 @@ class TrainLoop:
             model=self.model,
             use_fp16=self.use_fp16,
             fp16_scale_growth=self.fp16_scale_growth,
+            grad_clip_norm=args.grad_clip_norm,
         )
 
         self.save_dir = args.save_dir

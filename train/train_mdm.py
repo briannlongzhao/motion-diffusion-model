@@ -44,7 +44,8 @@ def main():
                               fixed_len=args.pred_len + args.context_len, 
                               pred_len=args.pred_len,
                               device=dist_util.dev(),
-                              use_cache=args.use_cache
+                              use_cache=args.use_cache,
+                              image_condition=args.image_condition
                               )
 
     print("creating model and diffusion...")

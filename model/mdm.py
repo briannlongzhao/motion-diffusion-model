@@ -45,6 +45,7 @@ class MDM(nn.Module):
 
         self.cond_mode = kargs.get('cond_mode', 'no_cond')
         self.cond_mask_prob = kargs.get('cond_mask_prob', 0.)
+        self.cond_img_prob = kargs.get('cond_img_prob', 0.)
         self.mask_frames = kargs.get('mask_frames', False)
         self.arch = arch
         self.gru_emb_dim = self.latent_dim if self.arch == 'gru' else 0
@@ -129,6 +130,9 @@ class MDM(nn.Module):
                 self.embed_action = EmbedAction(self.num_actions, self.latent_dim)
                 print('EMBED ACTION')
 
+            if 'image' in self.cond_mode:
+                self.embed_image = nn.Linear(768, self.latent_dim)
+
         self.output_process = OutputProcess(self.data_rep, self.input_feats, self.latent_dim, self.njoints,
                                             self.nfeats)
 
@@ -150,12 +154,12 @@ class MDM(nn.Module):
 
         return clip_model
 
-    def mask_cond(self, cond, force_mask=False):
+    def mask_cond(self, cond, prob, force_mask=False):
         bs = cond.shape[-2]
         if force_mask:
             return torch.zeros_like(cond)
-        elif self.training and self.cond_mask_prob > 0.:
-            mask = torch.bernoulli(torch.ones(bs, device=cond.device) * self.cond_mask_prob).view(1, bs, 1)  # 1-> use null_cond, 0-> use real cond
+        elif self.training and prob > 0.:
+            mask = torch.bernoulli(torch.ones(bs, device=cond.device) * prob).view(1, bs, 1)  # 1-> use null_cond, 0-> use real cond
             return cond * (1. - mask)
         else:
             return cond
@@ -196,7 +200,7 @@ class MDM(nn.Module):
 
         if 'target_cond' in y.keys():
             # NOTE: We don't use CFG for joints - but we do wat to support uncond sampling for generation and eval!
-            time_emb += self.mask_cond(self.embed_target_cond(y['target_cond'], y['target_joint_names'], y['is_heading'])[None], force_mask=y.get('target_uncond', False))  # For uncond support and CFG
+            time_emb += self.mask_cond(self.embed_target_cond(y['target_cond'], y['target_joint_names'], y['is_heading'])[None], prob=self.cond_mask_prob, force_mask=y.get('target_uncond', False))  # For uncond support and CFG
             # time_emb += self.embed_target_cond(y['target_cond'], y['target_joint_names'], y['is_heading'])[None]  
 
         # Build input for prefix completion
@@ -215,7 +219,7 @@ class MDM(nn.Module):
                 enc_text, text_mask = enc_text
                 if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
                     text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
-            text_emb = self.embed_text(self.mask_cond(enc_text, force_mask=force_mask))  # casting mask for the single-prompt-for-all case
+            text_emb = self.embed_text(self.mask_cond(enc_text, prob=self.cond_mask_prob, force_mask=force_mask))  # casting mask for the single-prompt-for-all case
             if self.emb_policy == 'add':
                 emb = text_emb + time_emb
             else:
@@ -224,6 +228,14 @@ class MDM(nn.Module):
         if 'action' in self.cond_mode:
             action_emb = self.embed_action(y['action'])
             emb = time_emb + self.mask_cond(action_emb, force_mask=force_mask)
+        if 'image' in self.cond_mode:
+            img_emb = self.embed_image(y['feature'].float()).permute(1, 0, 2)
+            img_emb = self.mask_cond(img_emb, prob=self.cond_img_prob, force_mask=force_mask)
+            if self.emb_policy == 'add':
+                emb = emb + img_emb
+            else:
+                emb = torch.cat([img_emb, emb], dim=0)
+                text_mask = torch.cat([torch.zeros_like(text_mask[:, 0:1]), text_mask], dim=1)
         if self.cond_mode == 'no_cond': 
             # unconstrained
             emb = time_emb

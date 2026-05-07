@@ -11,7 +11,7 @@ def load_model_wo_clip(model, state_dict):
     del state_dict['sequence_pos_encoder.pe']  # no need to load it (fixed), and causes size mismatch for older models
     del state_dict['embed_timestep.sequence_pos_encoder.pe']  # no need to load it (fixed), and causes size mismatch for older models
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-    assert len(unexpected_keys) == 0
+    assert len(unexpected_keys) == 0, f"Unexpected keys when loading model: {unexpected_keys}"
     assert all([k.startswith('clip_model.') or 'sequence_pos_encoder' in k for k in missing_keys])
 
 
@@ -67,7 +67,7 @@ def get_model_args(args, data):
             'translation': True, 'pose_rep': 'rot6d', 'glob': True, 'glob_rot': True,
             'latent_dim': args.latent_dim, 'ff_size': 1024, 'num_layers': args.layers, 'num_heads': 4,
             'dropout': 0.1, 'activation': "gelu", 'data_rep': data_rep, 'cond_mode': cond_mode,
-            'cond_mask_prob': args.cond_mask_prob, 'action_emb': action_emb, 'arch': args.arch,
+            'cond_mask_prob': args.cond_mask_prob, 'cond_img_prob': args.cond_img_prob, 'action_emb': action_emb, 'arch': args.arch,
             'emb_trans_dec': args.emb_trans_dec, 'clip_version': clip_version, 'dataset': args.dataset,
             'text_encoder_type': args.text_encoder_type,
             'pos_embed_max_len': args.pos_embed_max_len, 'mask_frames': args.mask_frames,
